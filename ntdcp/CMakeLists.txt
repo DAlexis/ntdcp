@@ -8,6 +8,7 @@ add_library(${PROJECT_NAME}
     src/package.cpp
     ntdcp/system-driver.hpp
     ntdcp/utils.hpp
-    src/utils.cpp)
+    src/utils.cpp
+    ntdcp/node.hpp)
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${PROJECT_SOURCE_DIR})

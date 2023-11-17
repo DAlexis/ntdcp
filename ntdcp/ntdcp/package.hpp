@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ntdcp/utils.hpp"
 #include <cstdint>
 
 namespace ntdcp
@@ -29,13 +30,13 @@ struct Package
 
     TransportType transport_type = TransportType::no_acknoledgement;
 
-    uint8_t* data = nullptr;
+    const uint8_t* data = nullptr;
     uint16_t size = 0;
 };
 
-bool parse_package(Package& out, uint8_t* buffer, uint16_t buffer_size);
+bool parse_package(Package& out, MemBlock block);
 uint16_t package_size(const Package& out);
-void write_package(const Package& package, uint8_t* buffer);
+void write_package(const Package& package, SerialWriteAccessor& write_to);
 
 
 }

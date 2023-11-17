@@ -6,9 +6,11 @@ if(GTest_FOUND)
 project(ntdcp-tests)
 
 
-add_executable(${PROJECT_NAME} placeholder.cpp)
+add_executable(${PROJECT_NAME} placeholder.cpp
+    test-package.cpp)
 
 target_link_libraries (${PROJECT_NAME}
+    ntdcp
     GTest::Main
 )
 
