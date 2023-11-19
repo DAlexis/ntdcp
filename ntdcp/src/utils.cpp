@@ -140,9 +140,9 @@ bool Buffer::operator==(const Buffer& right) const
     return m_contents == right.m_contents;
 }
 
-std::vector<uint8_t>& Buffer::contents()
+MemBlock Buffer::contents() const
 {
-    return m_contents;
+    return MemBlock(m_contents.data(), m_contents.size());
 }
 
 bool Buffer::put(const void* data, size_t size)
@@ -468,17 +468,27 @@ const uint8_t* MemBlock::end() const
     return m_end;
 }
 
+bool MemBlock::operator==(const MemBlock& right) const
+{
+    if (size() != right.size())
+        return false;
+
+    if (m_begin == right.m_begin)
+        return true;
+
+    return memcmp(m_begin, right.m_begin, size()) == 0;
+}
 
 
 // ---------------------------
 // BitExtractor
 
-BitExtractor::BitExtractor(const uint8_t* buffer, size_t max_size) :
+BitReader::BitReader(const uint8_t* buffer, size_t max_size) :
     m_buffer(buffer), m_bytes_left(max_size)
 {
 }
 
-uint8_t BitExtractor::get(int bits_count)
+uint8_t BitReader::get(int bits_count)
 {
     uint8_t result = 0;
     if (bits_count >= m_bits_left)
@@ -752,3 +762,17 @@ uint8_t& RingBuffer::operator[](size_t pos)
     return m_contents[target_pos];
 }
 */
+
+uint32_t ntdcp::hash_Ly(uint8_t next_byte, uint32_t prev_hash)
+{
+    return (prev_hash * 1664525) + next_byte + 1013904223;
+}
+
+uint32_t hash_Ly(const void * buf, uint32_t size, uint32_t hash)
+{
+    for(uint32_t i=0; i<size; i++)
+        hash = ntdcp::hash_Ly(reinterpret_cast<const uint8_t*>(buf)[i], hash);
+
+    return hash;
+}
+

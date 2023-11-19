@@ -15,6 +15,20 @@ struct MinimalHeader
 
 static_assert(sizeof(MinimalHeader) == 1, "struct MinimalHeader has size > 1 byte");
 
+bool Package::operator==(const Package& right) const
+{
+    return  source_addr == right.source_addr
+        && destination_addr == right.destination_addr
+        && source_port == right.source_port
+        && destination_port == right.destination_port
+        && package_id == right.package_id
+        && session_id == right.session_id
+        && acknoledgement_for_id == right.acknoledgement_for_id
+        && hop_limit == right.hop_limit
+        && transport_type == right.transport_type
+        && data == right.data;
+}
+
 bool ntdcp::parse_package(Package& out, MemBlock block)
 {
     out = Package();
@@ -24,10 +38,10 @@ bool ntdcp::parse_package(Package& out, MemBlock block)
         return false;
 
     block >> out;
-    if (out.size > block.size())
+    if (out.data.size() > block.size())
         return false;
 
-    out.data = block.begin();
+    out.data = block;
     return true;
     /*
     if (buffer_size < sizeof(MinimalHeader))
@@ -52,12 +66,12 @@ bool ntdcp::parse_package(Package& out, MemBlock block)
 uint16_t ntdcp::package_size(const Package& out)
 {
     /// Temporal trivial implementation
-    return sizeof(Package) + out.size;
+    return sizeof(Package) + out.data.size();
 }
 
 void ntdcp::write_package(const Package& package, SerialWriteAccessor& write_to)
 {
     /// Temporal trivial implementation
     write_to.put_copy(package);
-    write_to.put(package.data, package.size);
+    write_to.put(package.data.begin(), package.data.size());
 }

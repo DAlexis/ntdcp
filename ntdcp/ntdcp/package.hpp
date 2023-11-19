@@ -30,8 +30,9 @@ struct Package
 
     TransportType transport_type = TransportType::no_acknoledgement;
 
-    const uint8_t* data = nullptr;
-    uint16_t size = 0;
+    MemBlock data;
+
+    bool operator==(const Package&) const;
 };
 
 bool parse_package(Package& out, MemBlock block);

@@ -15,7 +15,9 @@ namespace ntdcp
 class Buffer;
 class RingBuffer;
 
-
+/**
+ * @brief The SerialReadAccessor class represents something serially readable.
+ */
 class SerialReadAccessor
 {
 public:
@@ -51,6 +53,9 @@ public:
     }
 };
 
+/**
+ * @brief The SerialWriteAccessor class represents something seriallu writable
+ */
 class SerialWriteAccessor
 {
 private:
@@ -104,13 +109,22 @@ private:
     };
 };
 
-// todo
+/**
+ * @brief The MemBlock class is pre-allocated memory buffer that DOES NOT OWN it's memory
+ * or prolongate it's lifetime in any manner
+ */
 struct MemBlock : public SerialReadAccessor
 {
 public:
     MemBlock(const MemBlock& mem_block, size_t offset);
-    MemBlock(const uint8_t* begin = nullptr, size_t size = 0);
+    explicit MemBlock(const uint8_t* begin = nullptr, size_t size = 0);
     MemBlock(const MemBlock&) = default;
+
+    template<typename T>
+    static MemBlock wrap(const T& v)
+    {
+        return MemBlock(reinterpret_cast<const uint8_t*>(&v), sizeof(T));
+    }
 
     void skip(size_t count) override;
     void get(uint8_t* buf, size_t size) const override;
@@ -136,28 +150,17 @@ public:
         return m_end - m_begin >= sizeof(T);
     }
 
+    bool operator==(const MemBlock& right) const;
+
 private:
     const uint8_t* m_begin;
     const uint8_t* m_end;
 };
 
-
-class BitExtractor
-{
-public:
-    BitExtractor(const uint8_t* buffer, size_t max_size);
-
-    uint8_t get(int bits_count);
-
-private:
-    const uint8_t* m_buffer;
-    size_t m_bytes_left;
-
-    uint8_t m_bits_left = 8;
-};
-
-
-class Buffer : public std::enable_shared_from_this<Buffer>, public SerialWriteAccessor
+/**
+ * @brief The Buffer class is a place where to put data and it OWNS a memory
+ */
+class Buffer : public SerialWriteAccessor
 {
 public:
     using ptr = std::shared_ptr<Buffer>;
@@ -176,7 +179,7 @@ public:
     bool put(SerialReadAccessor& accessor, size_t size) override;
     bool will_fit(size_t size) override;
 
-    std::vector<uint8_t>& contents();
+    MemBlock contents() const;
 
     ptr clone() const;
 
@@ -199,8 +202,8 @@ private:
 };
 
 /**
- * @brief The RingBufferClass class is always a serial accessor to itself,
- * because it stores reading pointer and it should be the only one
+ * @brief The RingBufferClass class OWNS it's memory of gived pre-defined size.
+ * It inherits both read and write accessors
  */
 class RingBuffer : public SerialReadAccessor, public SerialWriteAccessor
 {
@@ -242,7 +245,10 @@ private:
     uint32_t m_p_write = 0, m_p_read = 0;
 };
 
-
+/**
+ * @brief The SegmentBuffer class designed to concatenate different buffers.
+ * It owns buffers storing it's shared_ptrs
+ */
 class SegmentBuffer
 {
 public:
@@ -263,5 +269,39 @@ private:
 
     std::list<Buffer::ptr> m_segments;
 };
+
+/**
+ * @brief The BitExtractor class does not own amy memory and extracts bits from
+ * the array
+ *
+ * @todo implementation
+ */
+class BitReader
+{
+public:
+    BitReader(const uint8_t* buffer, size_t max_size);
+
+    uint8_t get(int bits_count);
+
+private:
+    const uint8_t* m_buffer;
+    size_t m_bytes_left;
+
+    uint8_t m_bits_left = 8;
+};
+
+/**
+ * @brief The BitWriter class writes bits into memory
+ *
+ * @todo implementation
+ */
+class BitWriter
+{
+public:
+private:
+};
+
+uint32_t hash_Ly(uint8_t next_byte, uint32_t prev_hash);
+uint32_t hash_Ly(const void * buf, uint32_t size, uint32_t hash = 0);
 
 }
