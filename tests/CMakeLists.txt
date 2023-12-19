@@ -7,7 +7,10 @@ project(ntdcp-tests)
 
 
 add_executable(${PROJECT_NAME} placeholder.cpp
-    test-package.cpp)
+    test-package.cpp
+    test-channel.cpp
+    test-caching-set.cpp
+    test-network-simple.cpp)
 
 target_link_libraries (${PROJECT_NAME}
     ntdcp

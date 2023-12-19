@@ -15,6 +15,14 @@ namespace ntdcp
 class Buffer;
 class RingBuffer;
 
+template<typename T>
+class PtrAliases
+{
+public:
+    using ptr = std::shared_ptr<T>;
+    using cptr = std::shared_ptr<const T>;
+};
+
 /**
  * @brief The SerialReadAccessor class represents something serially readable.
  */
@@ -52,6 +60,55 @@ public:
         return *this;
     }
 };
+
+/**
+ * @brief The MemBlock class is pre-allocated memory buffer that DOES NOT OWN it's memory
+ * or prolongate it's lifetime in any manner
+ */
+struct MemBlock : public SerialReadAccessor
+{
+public:
+    MemBlock(const MemBlock& mem_block, size_t offset);
+    explicit MemBlock(const uint8_t* begin = nullptr, size_t size = 0);
+    MemBlock(const MemBlock&) = default;
+
+    template<typename T>
+    static MemBlock wrap(const T& v)
+    {
+        return MemBlock(reinterpret_cast<const uint8_t*>(&v), sizeof(T));
+    }
+
+    void skip(size_t count) override;
+    void get(uint8_t* buf, size_t size) const override;
+    size_t size() const override;
+    uint8_t operator[](size_t pos) const override;
+
+    MemBlock offset(size_t off) const;
+
+    const uint8_t* begin() const;
+    const uint8_t* end() const;
+
+    template<typename T>
+    MemBlock& operator>>(T& right)
+    {
+        right = *reinterpret_cast<const T*>(m_begin);
+        m_begin += sizeof(T);
+        return *this;
+    }
+
+    template<typename T>
+    bool can_contain()
+    {
+        return m_end - m_begin >= sizeof(T);
+    }
+
+    bool operator==(const MemBlock& right) const;
+
+private:
+    const uint8_t* m_begin;
+    const uint8_t* m_end;
+};
+
 
 /**
  * @brief The SerialWriteAccessor class represents something seriallu writable
@@ -104,63 +161,22 @@ private:
             m_write_accessor.put(reinterpret_cast<const void*>(&variable), sizeof(T));
             return *this;
         }
+
+        RawStream& operator<<(const MemBlock& mem)
+        {
+            m_write_accessor.put(mem.begin(), mem.size());
+            return *this;
+        }
+
     private:
         SerialWriteAccessor& m_write_accessor;
     };
 };
 
 /**
- * @brief The MemBlock class is pre-allocated memory buffer that DOES NOT OWN it's memory
- * or prolongate it's lifetime in any manner
- */
-struct MemBlock : public SerialReadAccessor
-{
-public:
-    MemBlock(const MemBlock& mem_block, size_t offset);
-    explicit MemBlock(const uint8_t* begin = nullptr, size_t size = 0);
-    MemBlock(const MemBlock&) = default;
-
-    template<typename T>
-    static MemBlock wrap(const T& v)
-    {
-        return MemBlock(reinterpret_cast<const uint8_t*>(&v), sizeof(T));
-    }
-
-    void skip(size_t count) override;
-    void get(uint8_t* buf, size_t size) const override;
-    size_t size() const override;
-    uint8_t operator[](size_t pos) const override;
-
-    MemBlock offset(size_t off) const;
-
-    const uint8_t* begin() const;
-    const uint8_t* end() const;
-
-    template<typename T>
-    MemBlock& operator>>(T& right)
-    {
-        right = *reinterpret_cast<const T*>(m_begin);
-        m_begin += sizeof(T);
-        return *this;
-    }
-
-    template<typename T>
-    bool can_contain()
-    {
-        return m_end - m_begin >= sizeof(T);
-    }
-
-    bool operator==(const MemBlock& right) const;
-
-private:
-    const uint8_t* m_begin;
-    const uint8_t* m_end;
-};
-
-/**
  * @brief The Buffer class is a place where to put data and it OWNS a memory
  */
-class Buffer : public SerialWriteAccessor
+class Buffer : public SerialWriteAccessor, public PtrAliases<Buffer>
 {
 public:
     using ptr = std::shared_ptr<Buffer>;
@@ -168,6 +184,8 @@ public:
     static ptr create(size_t size = 0, const void* init_data = nullptr);
     static ptr create(SerialReadAccessor& data, size_t size);
     static ptr create(SerialReadAccessor& data);
+    static ptr create(const MemBlock& data);
+    static ptr create_from_string(const char* str);
 
     template<typename T>
     static ptr serialize(const T& data)
@@ -252,7 +270,7 @@ private:
 class SegmentBuffer
 {
 public:
-    SegmentBuffer(Buffer::ptr buf = nullptr);
+    explicit SegmentBuffer(Buffer::ptr buf = nullptr);
     void push_front(Buffer::ptr buf);
     void push_back(Buffer::ptr buf);
 

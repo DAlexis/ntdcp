@@ -1,0 +1,55 @@
+#pragma once
+
+#include "ntdcp/system-driver.hpp"
+
+namespace ntdcp {
+
+
+class SystemDriverDeterministic : public ISystemDriver
+{
+public:
+    uint32_t random() override;
+    std::chrono::steady_clock::time_point now() const override;
+
+    void increment_time(std::chrono::milliseconds dt);
+
+private:
+    uint32_t m_next_random = 1;
+    std::chrono::steady_clock::time_point m_current_time;
+};
+
+class TransmissionMedium;
+
+class VirtualPhysicalInterface : public IPhysicalInterface, public std::enable_shared_from_this<VirtualPhysicalInterface>
+{
+public:
+    static std::shared_ptr<VirtualPhysicalInterface> create(PhysicalInterfaceOptions opts, ISystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium);
+
+    SerialReadAccessor& incoming() override;
+    void send(Buffer::ptr data) override;
+    bool busy() const override;
+    const PhysicalInterfaceOptions& options() const override;
+
+    void receive_from_medium(Buffer::ptr data);
+
+private:
+    VirtualPhysicalInterface(PhysicalInterfaceOptions opts, ISystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium);
+
+    PhysicalInterfaceOptions m_opts;
+    ISystemDriver::ptr m_sys;
+    std::chrono::steady_clock::time_point m_last_tx;
+    std::shared_ptr<TransmissionMedium> m_medium;
+    RingBuffer m_data;
+};
+
+class TransmissionMedium : public PtrAliases<TransmissionMedium>
+{
+public:
+    void add_client(std::shared_ptr<VirtualPhysicalInterface> client);
+    void send(Buffer::ptr data, std::shared_ptr<VirtualPhysicalInterface> sender);
+
+private:
+    std::vector<std::weak_ptr<VirtualPhysicalInterface>> m_clients;
+};
+
+}

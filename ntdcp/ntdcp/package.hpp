@@ -24,7 +24,7 @@ struct Package
     uint16_t package_id = 0;
     uint16_t session_id = 0;
 
-    uint16_t acknoledgement_for_id = 0;
+    uint16_t acknoledgement_for_id = 0; // It should be a list!
 
     uint8_t hop_limit = 255;
 
@@ -37,7 +37,7 @@ struct Package
 
 bool parse_package(Package& out, MemBlock block);
 uint16_t package_size(const Package& out);
-void write_package(const Package& package, SerialWriteAccessor& write_to);
+void write_package(const Package& package, SerialWriteAccessor& accessor);
 
 
 }

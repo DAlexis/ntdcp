@@ -87,7 +87,7 @@ void ChannelLayer::find_next_headers(SerialReadAccessor& accessor)
         size_t search_limit = accessor.size() - sizeof(ChannelHeader);
         for (m_header_search_pos = 0; m_header_search_pos < search_limit; ++m_header_search_pos)
         {
-            if (accessor.as<uint32_t>(m_header_search_pos) == ChannelHeader::magic_number_value)
+            if (accessor.as<typeof(ChannelHeader::magic)>(m_header_search_pos) == ChannelHeader::magic_number_value)
                 break;
         }
         accessor.skip(m_header_search_pos);
@@ -97,7 +97,7 @@ void ChannelLayer::find_next_headers(SerialReadAccessor& accessor)
     size_t search_limit = accessor.size() - sizeof(ChannelHeader);
     for (size_t i = m_header_search_pos; i < search_limit; ++i)
     {
-        if (accessor.as<uint32_t>(i) != ChannelHeader::magic_number_value)
+        if (accessor.as<typeof(ChannelHeader::magic)>(i) != ChannelHeader::magic_number_value)
             continue;
 
         DecodingInstance new_instance;

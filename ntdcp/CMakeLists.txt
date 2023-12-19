@@ -11,6 +11,14 @@ add_library(${PROJECT_NAME}
     src/utils.cpp
     ntdcp/node.hpp
     ntdcp/channel.hpp
-    src/channel.cpp)
+    src/channel.cpp
+    src/node.cpp
+    ntdcp/network.hpp
+    src/network.cpp
+    ntdcp/caching-set.hpp
+    ntdcp/virtual-device.hpp
+    src/virtual-device.cpp)
+
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${PROJECT_SOURCE_DIR})

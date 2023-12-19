@@ -69,9 +69,8 @@ uint16_t ntdcp::package_size(const Package& out)
     return sizeof(Package) + out.data.size();
 }
 
-void ntdcp::write_package(const Package& package, SerialWriteAccessor& write_to)
+void ntdcp::write_package(const Package& package, SerialWriteAccessor& accessor)
 {
     /// Temporal trivial implementation
-    write_to.put_copy(package);
-    write_to.put(package.data.begin(), package.data.size());
+    accessor.raw() << package << package.data;
 }

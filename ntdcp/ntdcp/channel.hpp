@@ -11,9 +11,9 @@ namespace ntdcp
 #pragma pack(push, 1)
 struct ChannelHeader
 {
-    constexpr static uint32_t magic_number_value = 0xABCD;
-    uint32_t magic = magic_number_value;
-    uint32_t size = 0;
+    constexpr static uint16_t magic_number_value = 0xAB;
+    uint16_t magic = magic_number_value;
+    uint16_t size = 0;
     uint32_t checksum = 0;
 };
 #pragma pack(pop)
