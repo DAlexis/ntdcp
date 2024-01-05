@@ -17,7 +17,11 @@ add_library(${PROJECT_NAME}
     src/network.cpp
     ntdcp/caching-set.hpp
     ntdcp/virtual-device.hpp
-    src/virtual-device.cpp)
+    src/virtual-device.cpp
+    ntdcp/transport.hpp
+    src/transport.cpp
+    ntdcp/socket-datagram.hpp
+    src/socket-datagram.cpp)
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
 

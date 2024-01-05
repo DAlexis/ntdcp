@@ -15,14 +15,18 @@ void NetworkLayer::add_physical(IPhysicalInterface::ptr phys)
     m_phys_devices.push_back(phys);
 }
 
-
 void NetworkLayer::send(Buffer::ptr data, uint64_t destination_addr, uint8_t hop_limit)
+{
+    send(SegmentBuffer(data), destination_addr, hop_limit);
+}
+
+void NetworkLayer::send(SegmentBuffer data, uint64_t destination_addr, uint8_t hop_limit)
 {
     if (address_acceptable(destination_addr))
     {
         Package p;
         p.source_addr = m_addr;
-        p.data = data;
+        p.data = data.merge();
         m_incoming.push(p);
 
         if (destination_addr == m_addr) // Package is directly for me
@@ -35,14 +39,15 @@ void NetworkLayer::send(Buffer::ptr data, uint64_t destination_addr, uint8_t hop
     package.destination_addr = destination_addr;
     package.package_id = random_id();
     package.hop_limit = hop_limit;
-    package.data = data;
+    package.data = nullptr;
 
     m_packages_already_received.check_update(package.package_id);
 
     /// @todo Optimize using segment buffer to prevent copying
-    SegmentBuffer seg_buf = encode(package);
-    m_channel.encode(seg_buf);
-    Buffer::ptr to_send_encoded = seg_buf.merge();
+
+    encode(package, data);
+    m_channel.encode(data);
+    Buffer::ptr to_send_encoded = data.merge();
 
     for (const auto& dev : m_phys_devices)
     {
@@ -54,6 +59,11 @@ void NetworkLayer::serve()
 {
     serve_incoming();
     serve_outgoing();
+}
+
+ISystemDriver::ptr NetworkLayer::system_driver()
+{
+    return m_sys;
 }
 
 void NetworkLayer::serve_incoming()
@@ -115,8 +125,8 @@ void NetworkLayer::retransmit(const PackageDecoded& pkg, IPhysicalInterface::ptr
     PackageDecoded to_send = pkg;
     to_send.hop_limit -= 1;
 
-    /// @todo Optimize using segment buffer to prevent copying
-    SegmentBuffer seg_buf(encode(to_send));
+    SegmentBuffer seg_buf(pkg.data);
+    encode(to_send, seg_buf);
     m_channel.encode(seg_buf);
     Buffer::ptr to_send_encoded = seg_buf.merge();
 
@@ -174,12 +184,10 @@ std::optional<NetworkLayer::PackageDecoded> NetworkLayer::decode(const MemBlock&
     return result;
 }
 
-SegmentBuffer NetworkLayer::encode(PackageDecoded package)
+void NetworkLayer::encode(PackageDecoded package, SegmentBuffer& buf)
 {
     /// Tempolral trivial implementation
     Buffer::ptr header = Buffer::create();
     header->raw() << package.source_addr << package.destination_addr << package.package_id << package.hop_limit;
-    SegmentBuffer result(header);
-    result.push_back(package.data);
-    return result;
+    buf.push_front(header);
 }

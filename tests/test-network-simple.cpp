@@ -1,13 +1,12 @@
 #include "ntdcp/network.hpp"
 #include "ntdcp/virtual-device.hpp"
+#include "test-helpers.hpp"
 #include <gtest/gtest.h>
 
 using namespace ntdcp;
 using namespace std::literals::chrono_literals;
 
-const char* test_string_1 = "Some string data";
-const char* test_string_2 = "Some another string here";
-const char* test_string_3 = "Contents here";
+
 
 class NetworkTest : public testing::Test {
 protected:
@@ -89,4 +88,5 @@ TEST_F(NetworkTest, TwoPointsWired)
     EXPECT_EQ(in2->source_addr, 321);
     EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_3), 0);
 }
+
 

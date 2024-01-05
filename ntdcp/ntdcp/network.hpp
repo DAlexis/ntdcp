@@ -11,7 +11,7 @@
 namespace ntdcp
 {
 
-class NetworkLayer
+class NetworkLayer : public PtrAliases<NetworkLayer>
 {
 public:
     struct Package
@@ -24,9 +24,12 @@ public:
     void add_physical(IPhysicalInterface::ptr phys);
 
     void send(Buffer::ptr data, uint64_t destination_addr, uint8_t hop_limit = 10);
+    void send(SegmentBuffer data, uint64_t destination_addr, uint8_t hop_limit = 10);
     std::optional<Package> incoming();
 
     void serve();
+
+    ISystemDriver::ptr system_driver();
 
 private:
     struct PackageDecoded
@@ -47,7 +50,7 @@ private:
     uint16_t random_id();
 
     static std::optional<PackageDecoded> decode(const MemBlock& data);
-    static SegmentBuffer encode(PackageDecoded package);
+    static void encode(PackageDecoded package, SegmentBuffer& buf);
 
     ChannelLayer m_channel;
     ISystemDriver::ptr m_sys;

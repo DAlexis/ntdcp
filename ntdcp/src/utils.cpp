@@ -404,7 +404,7 @@ Buffer::ptr SegmentBuffer::merge()
     return m_segments.front();
 }
 
-bool SegmentBuffer::empty()
+bool SegmentBuffer::empty() const
 {
     return m_segments.empty();
 }
@@ -414,7 +414,7 @@ const std::list<Buffer::ptr>& SegmentBuffer::segments()
     return m_segments;
 }
 
-size_t SegmentBuffer::size()
+size_t SegmentBuffer::size() const
 {
     size_t total_size = 0;
     for (const auto& segment : m_segments)
@@ -422,6 +422,11 @@ size_t SegmentBuffer::size()
         total_size += segment->size();
     }
     return total_size;
+}
+
+void SegmentBuffer::clear()
+{
+    m_segments.clear();
 }
 
 

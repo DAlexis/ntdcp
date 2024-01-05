@@ -21,6 +21,9 @@ class PtrAliases
 public:
     using ptr = std::shared_ptr<T>;
     using cptr = std::shared_ptr<const T>;
+
+    using wptr = std::weak_ptr<T>;
+    using cwptr = std::weak_ptr<const T>;
 };
 
 /**
@@ -278,8 +281,9 @@ public:
     void push_back(SegmentBuffer& buf);
 
     Buffer::ptr merge();
-    bool empty();
-    size_t size();
+    bool empty() const;
+    size_t size() const;
+    void clear();
 
     const std::list<Buffer::ptr>& segments();
 
