@@ -114,11 +114,11 @@ std::optional<std::pair<TransportLayer::TransportHeader0, Buffer::ptr>> Transpor
     uint8_t dst_port_bits = header.header_byte_0 & 0x03;
     switch(dst_port_bits)
     {
-    case 0b00:
+    case 0b01:
         // Default port == 1
         header.target_port = 1;
         return std::make_pair(header, Buffer::create(mem));
-    case 0b01:
+    case 0b10:
     {
         // Port number <= 255
         uint8_t port_number = 0;
@@ -126,7 +126,7 @@ std::optional<std::pair<TransportLayer::TransportHeader0, Buffer::ptr>> Transpor
         header.target_port = port_number;
         return std::make_pair(header, Buffer::create(mem));
     }
-    case 0b10:
+    case 0b11:
         // Port number > 255
         mem >> header.target_port;
         return std::make_pair(header, Buffer::create(mem));
@@ -142,16 +142,16 @@ void TransportLayer::encode_base_header(SegmentBuffer& seg_buf, const TransportL
 
     if (header.target_port == 1)
     {
-        header_bits_0 |= 0b00;
+        header_bits_0 |= 0b01;
         b->raw() << header_bits_0;
     }
     else if (header.target_port <= 255)
     {
-        header_bits_0 |= 0b01;
+        header_bits_0 |= 0b10;
         uint8_t short_target_port = uint8_t(header.target_port);
         b->raw() << header_bits_0 << short_target_port;
     } else {
-        header_bits_0 |= 0b10;
+        header_bits_0 |= 0b11;
         b->raw() << header_bits_0 << header.target_port;
     }
     seg_buf.push_front(b);

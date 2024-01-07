@@ -1,0 +1,59 @@
+#pragma once
+
+#include <queue>
+#include <mutex>
+#include <optional>
+
+namespace ntdcp
+{
+
+template<typename T, typename MutexType = std::mutex>
+class QueueLocking
+{
+public:
+    QueueLocking(size_t max_size = 10) :
+        m_max_size(max_size)
+    {
+    }
+
+    size_t size() const
+    {
+        return m_queue.size();
+    }
+
+    bool empty() const
+    {
+        return size() == 0;
+    }
+
+    bool full() const
+    {
+        return size() >= m_max_size;
+    }
+
+    bool push(const T& obj)
+    {
+        std::unique_lock<MutexType> lck(m_mutex);
+        if (m_queue.size() >= m_max_size)
+            return false;
+        m_queue.push(obj);
+        return true;
+    }
+
+    std::optional<T> pop()
+    {
+        std::unique_lock<MutexType> lck(m_mutex);
+        if (m_queue.empty())
+            return std::nullopt;
+        T front = m_queue.front();
+        m_queue.pop();
+        return front;
+    }
+
+private:
+    MutexType m_mutex;
+    size_t m_max_size;
+    std::queue<T> m_queue;
+};
+
+}

@@ -35,7 +35,7 @@ public:
     virtual ~SerialReadAccessor() = default;
 
     virtual void skip(size_t count) = 0;
-    virtual void get(uint8_t* buf, size_t size) const = 0;
+    virtual bool get(uint8_t* buf, size_t size) const = 0;
     virtual size_t size() const = 0;
     virtual uint8_t operator[](size_t pos) const = 0;
 
@@ -82,7 +82,7 @@ public:
     }
 
     void skip(size_t count) override;
-    void get(uint8_t* buf, size_t size) const override;
+    bool get(uint8_t* buf, size_t size) const override;
     size_t size() const override;
     uint8_t operator[](size_t pos) const override;
 
@@ -243,7 +243,7 @@ public:
     bool put(Buffer::ptr buf);
     bool will_fit(size_t size) override;
 
-    void get(uint8_t* buf, size_t size) const override;
+    bool get(uint8_t* buf, size_t size) const override;
     void extract(uint8_t* buf, size_t size) override;
     void skip(size_t size) override;
 

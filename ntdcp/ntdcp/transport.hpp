@@ -9,13 +9,19 @@ namespace ntdcp
  * Zero header byte meaning
  *
  * | _7_ | _6_ | _5_ | _4_ | _3_ | _2_ | _1_ | _0_ |
- *                                     \ d port sz /
+ *                         \ s port sz \ d port sz /
  *
  * 1,0: Destination port size
- *   - 0b00: target port is "1", no following port number
- *   - 0b01: target port is one following byte
- *   - 0b10: target port is two following bytes
- *   - 0b11: RESERVED
+ *   - 0b01: target port is "1", no following port number
+ *   - 0b10: target port is one following byte
+ *   - 0b11: target port is two following bytes
+ *   - 0b00: RESERVED
+ *
+ * 1,0: Source port size
+ *   - 0b01: source port is "1", no following port number
+ *   - 0b10: source port is one following byte
+ *   - 0b11: source port is two following bytes
+ *   - 0b00: RESERVED
  */
 
 class TransportLayer;
@@ -23,19 +29,11 @@ class TransportLayer;
 class SocketReceiver : public PtrAliases<SocketReceiver>
 {
 public:
-    struct Incoming
-    {
-        uint64_t addr;
-        Buffer::ptr data;
-    };
-
     SocketReceiver(uint16_t my_port);
 
     uint16_t port() const;
 
     virtual void receive(Buffer::ptr data, uint64_t src_addr, uint8_t header_bits_0) = 0;
-    virtual std::optional<Incoming> get_incoming() = 0;
-    virtual bool has_incoming() = 0;
 
 protected:
     uint16_t m_my_port;
@@ -51,8 +49,6 @@ public:
     uint64_t remote_addr() const;
     uint8_t hop_limit() const;
 
-    virtual bool busy() const = 0;
-    virtual void send(Buffer::ptr buf) = 0;
     virtual std::optional<std::pair<uint8_t, SegmentBuffer>> pick_outgoing() = 0;
 
 private:

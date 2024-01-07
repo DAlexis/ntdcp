@@ -34,12 +34,11 @@ void NetworkLayer::send(SegmentBuffer data, uint64_t destination_addr, uint8_t h
     }
 
     // Do not forget send to myself (if addr is good) and put id to m_packages_already_received
-    PackageDecoded package;
+    PackageHeader package;
     package.source_addr = m_addr;
     package.destination_addr = destination_addr;
     package.package_id = random_id();
     package.hop_limit = hop_limit;
-    package.data = nullptr;
 
     m_packages_already_received.check_update(package.package_id);
 
@@ -84,19 +83,21 @@ void NetworkLayer::serve_incoming()
             if (!pkg)
                 continue;
 
-            if (m_packages_already_received.check_update(pkg->package_id))
+            const PackageHeader& header = pkg->first;
+
+            if (m_packages_already_received.check_update(header.package_id))
                 continue;
 
-            if (address_acceptable(pkg->destination_addr))
+            if (address_acceptable(header.destination_addr))
             {
                 Package p;
-                p.source_addr = pkg->source_addr;
-                p.data = pkg->data;
+                p.source_addr = header.source_addr;
+                p.data = pkg->second;
                 m_incoming.push(p);
                 continue;
             }
 
-            retransmit(*pkg, phys);
+            retransmit(header, pkg->second, phys);
         }
     }
 }
@@ -117,15 +118,15 @@ void NetworkLayer::serve_outgoing()
     }
 }
 
-void NetworkLayer::retransmit(const PackageDecoded& pkg, IPhysicalInterface::ptr came_from)
+void NetworkLayer::retransmit(const PackageHeader& pkg, Buffer::ptr data, IPhysicalInterface::ptr came_from)
 {
     if (pkg.hop_limit == 0)
         return;
 
-    PackageDecoded to_send = pkg;
+    PackageHeader to_send = pkg;
     to_send.hop_limit -= 1;
 
-    SegmentBuffer seg_buf(pkg.data);
+    SegmentBuffer seg_buf(data);
     encode(to_send, seg_buf);
     m_channel.encode(seg_buf);
     Buffer::ptr to_send_encoded = seg_buf.merge();
@@ -169,25 +170,146 @@ uint16_t NetworkLayer::random_id()
     }
 }
 
-std::optional<NetworkLayer::PackageDecoded> NetworkLayer::decode(const MemBlock& mem_block)
+std::optional<std::pair<NetworkLayer::PackageHeader, Buffer::ptr>> NetworkLayer::decode(const MemBlock& mem_block)
 {
-    /// Tempolral trivial implementation
-    if (mem_block.size() < sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint16_t) + sizeof(uint8_t))
-    {
+    MemBlock m(mem_block);
+    if (mem_block.size() < sizeof(uint8_t))
         return std::nullopt;
-    }
 
-    MemBlock mem = mem_block;
-    PackageDecoded result;
-    mem >> result.source_addr >> result.destination_addr >> result.package_id >> result.hop_limit;
-    result.data = Buffer::create(mem.size(), mem.begin());
-    return result;
+    uint8_t flag_byte;
+    m >> flag_byte;
+
+    PackageHeader package;
+    package.hop_limit = flag_byte >> 4;
+    if (package.hop_limit == 0xF)
+        m >> package.hop_limit;
+    m >> package.package_id;
+
+    uint8_t src_size_bits = flag_byte & 0b11;
+    uint8_t dst_size_bits = (flag_byte >> 2) & 0b11;
+    package.source_addr = read_addr_from_mem(m, src_size_bits);
+    package.destination_addr = read_addr_from_mem(m, dst_size_bits);
+
+    return std::make_pair(package, Buffer::create(m.size(), m.begin()));
 }
 
-void NetworkLayer::encode(PackageDecoded package, SegmentBuffer& buf)
+void NetworkLayer::encode(PackageHeader package, SegmentBuffer& buf)
 {
-    /// Tempolral trivial implementation
+    uint8_t flag_byte = 0;
+    uint8_t src_addr_size_bits = get_addr_size_bits(package.source_addr);
+    uint8_t dst_addr_size_bits = get_addr_size_bits(package.destination_addr);
+
+    uint8_t hop_limit_bits = 0;
+    if (package.hop_limit < 0xF)
+    {
+        hop_limit_bits = package.hop_limit;
+    } else {
+        hop_limit_bits = 0xF;
+    }
+
+    flag_byte |= src_addr_size_bits;
+    flag_byte |= dst_addr_size_bits << 2;
+    flag_byte |= hop_limit_bits << 4;
+
     Buffer::ptr header = Buffer::create();
-    header->raw() << package.source_addr << package.destination_addr << package.package_id << package.hop_limit;
+    auto raw = header->raw();
+    raw << flag_byte;
+    raw << package.package_id;
+    if (hop_limit_bits == 0xF)
+        header->raw() << package.hop_limit;
+    put_address_to_buffer(header, package.source_addr);
+    put_address_to_buffer(header, package.destination_addr);
+
+
     buf.push_front(header);
+}
+
+uint8_t NetworkLayer::get_addr_size_bits(uint64_t addr)
+{
+    if (addr <= 0xFF)
+    {
+        return addr_size::bytes_1;
+    } else if (addr <= 0xFFFF)
+    {
+        return addr_size::bytes_2;
+    } else if (addr <= 0xFFFFFF)
+    {
+        return addr_size::bytes_3;
+    } else {
+        return addr_size::bytes_4;
+    }
+}
+
+void NetworkLayer::put_address_to_buffer(Buffer::ptr buf, uint64_t addr)
+{
+    if (addr <= 0xFF)
+    {
+        uint8_t x = uint8_t(addr);
+        buf->raw() << x;
+    } else if (addr <= 0xFFFF)
+    {
+        uint8_t x1 = addr & 0xFF;
+        addr >>= 8;
+        uint8_t x2 = addr & 0xFF;
+        buf->raw() << x2 << x1;
+    } else if (addr <= 0xFFFFFF)
+    {
+        uint8_t x1 = addr & 0xFF;
+        addr >>= 8;
+        uint8_t x2 = addr & 0xFF;
+        addr >>= 8;
+        uint8_t x3 = addr & 0xFF;
+        buf->raw() << x3 << x2 << x1;
+    } else {
+        uint8_t x1 = addr & 0xFF;
+        addr >>= 8;
+        uint8_t x2 = addr & 0xFF;
+        addr >>= 8;
+        uint8_t x3 = addr & 0xFF;
+        addr >>= 8;
+        uint8_t x4 = addr & 0xFF;
+        buf->raw() << x4 << x3 << x2 << x1;
+    }
+}
+
+uint64_t NetworkLayer::read_addr_from_mem(MemBlock& data, uint8_t address_size_bits)
+{
+    uint64_t result = 0;
+    uint8_t x = 0;
+    switch(address_size_bits)
+    {
+    case addr_size::bytes_1:
+        uint8_t x;
+        data >> x;
+        result = x;
+        break;
+
+    case addr_size::bytes_2:
+        data >> x;
+        result = x << 8;
+        data >> x;
+        result += x;
+        break;
+
+    case addr_size::bytes_3:
+        data >> x;
+        result = x << 16;
+        data >> x;
+        result += x << 8;
+        data >> x;
+        result += x;
+        break;
+
+    case addr_size::bytes_4:
+        data >> x;
+        result = x << 24;
+        data >> x;
+        result += x << 16;
+        data >> x;
+        result += x << 8;
+        data >> x;
+        result += x;
+        break;
+    }
+    return result;
 }

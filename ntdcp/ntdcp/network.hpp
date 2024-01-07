@@ -11,6 +11,30 @@
 namespace ntdcp
 {
 
+
+/**
+ * Zero header byte meaning
+ *
+ * | _7_ | _6_ | _5_ | _4_ | _3_ | _2_ | _1_ | _0_ |
+ * \      hop limit        \ dst_size  \  src size /
+ *
+ * 1,0: Source address size
+ *   - 0b00: 1 byte
+ *   - 0b01: 2 bytes
+ *   - 0b10: 3 bytes
+ *   - 0b11: 4 bytes
+ *
+ * 3,2: Destination address size
+ *   - 0b00: 1 byte
+ *   - 0b01: 2 bytes
+ *   - 0b10: 3 bytes
+ *   - 0b11: 4 bytes
+ *
+ * 7,6,5,4: hop limit
+ *   - if from 0b000 to 0b110 it is a value of hop limit
+ *   - if 0b111 then next byte after adresses is hop limit
+ */
+
 class NetworkLayer : public PtrAliases<NetworkLayer>
 {
 public:
@@ -32,25 +56,35 @@ public:
     ISystemDriver::ptr system_driver();
 
 private:
-    struct PackageDecoded
+    struct PackageHeader
     {
         uint64_t source_addr;
         uint64_t destination_addr;
         uint16_t package_id;
         uint8_t hop_limit = 255;
-
-        Buffer::ptr data;
     };
 
     void serve_incoming();
     void serve_outgoing();
-    void retransmit(const PackageDecoded& pkg, IPhysicalInterface::ptr came_from);
+    void retransmit(const PackageHeader& pkg, Buffer::ptr data, IPhysicalInterface::ptr came_from);
     bool address_acceptable(uint64_t addr);
 
     uint16_t random_id();
 
-    static std::optional<PackageDecoded> decode(const MemBlock& data);
-    static void encode(PackageDecoded package, SegmentBuffer& buf);
+    struct addr_size
+    {
+        constexpr static uint8_t bytes_1 = 0b00;
+        constexpr static uint8_t bytes_2 = 0b01;
+        constexpr static uint8_t bytes_3 = 0b10;
+        constexpr static uint8_t bytes_4 = 0b11;
+    };
+
+    static std::optional<std::pair<PackageHeader, Buffer::ptr>> decode(const MemBlock& data);
+    static void encode(PackageHeader package, SegmentBuffer& buf);
+
+    static uint8_t get_addr_size_bits(uint64_t addr);
+    static void put_address_to_buffer(Buffer::ptr buf, uint64_t addr);
+    static uint64_t read_addr_from_mem(MemBlock& data, uint8_t address_size_bits);
 
     ChannelLayer m_channel;
     ISystemDriver::ptr m_sys;

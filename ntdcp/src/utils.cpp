@@ -275,8 +275,10 @@ bool RingBuffer::will_fit(size_t size)
     return free_space() >= size;
 }
 
-void RingBuffer::get(uint8_t* buf, size_t size) const
+bool RingBuffer::get(uint8_t* buf, size_t size) const
 {
+    if (this->size() < size)
+        return false;
     uint32_t p_read = m_p_read;
     if (m_p_write >= p_read)
     {
@@ -293,6 +295,7 @@ void RingBuffer::get(uint8_t* buf, size_t size) const
             memcpy(buf+tail, &m_contents[0], size - tail);
         }
     }
+    return true;
 }
 
 void RingBuffer::extract(uint8_t* buf, size_t size)
@@ -457,9 +460,13 @@ void MemBlock::skip(size_t count)
         m_begin = m_end;
 }
 
-void MemBlock::get(uint8_t* buf, size_t buf_size) const
+bool MemBlock::get(uint8_t* buf, size_t buf_size) const
 {
+    if (size() < buf_size)
+        return false;
+
     memcpy(buf, m_begin, std::min(buf_size, size()));
+    return true;
 }
 
 size_t MemBlock::size() const

@@ -30,23 +30,23 @@ TEST(ChannelTest, SimpleTransmitReceive)
     TransportLayer tr2(net2);
 
     // Transmitters
-    auto sock_trans_1_p10 = std::make_shared<SocketTransmitterDatagram>(10, 321);
+    auto sock_trans_1_p10 = std::make_shared<SocketTransmitterDatagram<std::mutex>>(10, 321);
     tr1.add_transmitter(sock_trans_1_p10);
 
-    auto sock_trans_1_p1 = std::make_shared<SocketTransmitterDatagram>(1, 321);
+    auto sock_trans_1_p1 = std::make_shared<SocketTransmitterDatagram<std::mutex>>(1, 321);
     tr1.add_transmitter(sock_trans_1_p1);
 
-    auto sock_trans_1_p9999 = std::make_shared<SocketTransmitterDatagram>(9999, 321);
+    auto sock_trans_1_p9999 = std::make_shared<SocketTransmitterDatagram<std::mutex>>(9999, 321);
     tr1.add_transmitter(sock_trans_1_p9999);
 
     // Receivers
-    auto sock_recv_2_p10 = std::make_shared<SocketReceiverDatagram>(10);
+    auto sock_recv_2_p10 = std::make_shared<SocketReceiverDatagram<std::mutex>>(10);
     tr2.add_receiver(sock_recv_2_p10);
 
-    auto sock_recv_2_p1 = std::make_shared<SocketReceiverDatagram>();
+    auto sock_recv_2_p1 = std::make_shared<SocketReceiverDatagram<std::mutex>>();
     tr2.add_receiver(sock_recv_2_p1);
 
-    auto sock_recv_2_p9999 = std::make_shared<SocketReceiverDatagram>(9999);
+    auto sock_recv_2_p9999 = std::make_shared<SocketReceiverDatagram<std::mutex>>(9999);
     tr2.add_receiver(sock_recv_2_p9999);
 
     {
@@ -80,6 +80,28 @@ TEST(ChannelTest, SimpleTransmitReceive)
         EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_2), 0);
         in2 = sock_recv_2_p1->get_incoming();
         EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_1), 0);
+        in2 = sock_recv_2_p9999->get_incoming();
+        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_3), 0);
+    }
+
+    {
+        sock_trans_1_p9999->send(Buffer::create_from_string(test_string_1));
+        sock_trans_1_p9999->send(Buffer::create_from_string(test_string_2));
+        sock_trans_1_p9999->send(Buffer::create_from_string(test_string_3));
+
+        tr1.serve();
+        net1->serve();
+        net2->serve();
+        tr2.serve();
+        ASSERT_TRUE(sock_recv_2_p9999->has_incoming());
+        auto in2 = sock_recv_2_p9999->get_incoming();
+        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_1), 0);
+
+        ASSERT_TRUE(sock_recv_2_p9999->has_incoming());
+        in2 = sock_recv_2_p9999->get_incoming();
+        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_2), 0);
+
+        ASSERT_TRUE(sock_recv_2_p9999->has_incoming());
         in2 = sock_recv_2_p9999->get_incoming();
         EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_3), 0);
     }
