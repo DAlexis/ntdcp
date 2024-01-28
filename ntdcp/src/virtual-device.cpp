@@ -2,6 +2,16 @@
 
 using namespace ntdcp;
 
+void StdMutex::lock()
+{
+    m_mutex.lock();
+}
+
+void StdMutex::unlock()
+{
+    m_mutex.unlock();
+}
+
 uint32_t SystemDriverDeterministic::random()
 {
     if (m_next_random == 0)
@@ -14,11 +24,15 @@ std::chrono::steady_clock::time_point SystemDriverDeterministic::now() const
     return m_current_time;
 }
 
+std::unique_ptr<IMutex> SystemDriverDeterministic::create_mutex()
+{
+    return std::make_unique<StdMutex>();
+}
+
 void SystemDriverDeterministic::increment_time(std::chrono::milliseconds dt)
 {
     m_current_time += dt;
 }
-
 
 VirtualPhysicalInterface::VirtualPhysicalInterface(PhysicalInterfaceOptions opts, ISystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium) :
     m_opts(opts), m_sys(sys), m_medium(medium), m_data(opts.ring_buffer_size)

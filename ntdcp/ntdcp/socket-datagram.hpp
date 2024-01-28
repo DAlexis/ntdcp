@@ -6,7 +6,6 @@
 namespace ntdcp
 {
 
-template<class MutexType = std::mutex>
 class SocketReceiverDatagram : public SocketReceiver
 {
 public:
@@ -16,65 +15,32 @@ public:
         Buffer::ptr data;
     };
 
-    /// @todo Rewrite this with queue
-    SocketReceiverDatagram(uint16_t my_port = 1) :
-        SocketReceiver(my_port)
-    {
-    }
+    SocketReceiverDatagram(TransportLayer::ptr transport_layer, uint16_t my_port = 1);
+    ~SocketReceiverDatagram() override;
 
-    void receive(Buffer::ptr data, uint64_t src_addr, uint8_t header_bits_0) override
-    {
-        if (m_incoming_queue.full())
-            return; // Only drop is possible
-
-        Incoming inc;
-        inc.data = data;
-        inc.addr = src_addr;
-        m_incoming_queue.push(inc);
-    }
-
-    std::optional<Incoming> get_incoming()
-    {
-        return m_incoming_queue.pop();
-    }
-
-    bool has_incoming()
-    {
-        return !m_incoming_queue.empty();
-    }
-
+    void receive(Buffer::ptr data, uint64_t src_addr, uint16_t package_id, uint8_t header_bits_0) override;
+    std::optional<Incoming> get_incoming();
+    bool has_incoming() const;
 
 private:
 
-    QueueLocking<Incoming, MutexType> m_incoming_queue;
+    QueueLocking<Incoming> m_incoming_queue;
+    TransportLayer::ptr m_transport;
 };
 
-template<class MutexType = std::mutex>
 class SocketTransmitterDatagram : public SocketTransmitter
 {
 public:
-    SocketTransmitterDatagram(uint16_t target_port, uint64_t remote_addr, uint8_t hop_limit = 10) :
-        SocketTransmitter(target_port, remote_addr, hop_limit)
-    {
-    }
+    SocketTransmitterDatagram(TransportLayer::ptr transport_layer, uint16_t target_port, uint64_t remote_addr, uint8_t hop_limit = 10);
+    ~SocketTransmitterDatagram() override;
 
-    bool busy() const
-    {
-        return !m_outgoing_queue.full();
-    }
-
-    bool send(Buffer::ptr buf)
-    {
-        return m_outgoing_queue.push(std::make_pair(0, SegmentBuffer(buf)));
-    }
-
-    std::optional<std::pair<uint8_t, SegmentBuffer>> pick_outgoing() override
-    {
-        return m_outgoing_queue.pop();
-    }
+    bool busy() const;
+    bool send(Buffer::ptr buf);
+    std::optional<std::pair<uint8_t, SegmentBuffer>> pick_outgoing() override;
 
 private:
-    QueueLocking<std::pair<uint8_t, SegmentBuffer>, MutexType> m_outgoing_queue;
+    QueueLocking<std::pair<uint8_t, SegmentBuffer>> m_outgoing_queue;
+    TransportLayer::ptr m_transport;
 };
 
 }

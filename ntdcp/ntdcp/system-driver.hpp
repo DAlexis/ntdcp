@@ -7,12 +7,21 @@
 namespace ntdcp
 {
 
+class IMutex
+{
+public:
+    virtual ~IMutex() = default;
+    virtual void lock() = 0;
+    virtual void unlock() = 0;
+};
+
 class ISystemDriver : public PtrAliases<ISystemDriver>
 {
 public:
     virtual ~ISystemDriver() = default;
     virtual uint32_t random() = 0;
     virtual std::chrono::steady_clock::time_point now() const = 0;
+    virtual std::unique_ptr<IMutex> create_mutex() = 0;
 };
 
 struct PhysicalInterfaceOptions

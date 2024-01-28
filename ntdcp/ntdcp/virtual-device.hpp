@@ -1,15 +1,25 @@
 #pragma once
 
 #include "ntdcp/system-driver.hpp"
+#include <mutex>
 
 namespace ntdcp {
 
+class StdMutex : public IMutex
+{
+public:
+    void lock() override;
+    void unlock() override;
+private:
+    std::mutex m_mutex;
+};
 
 class SystemDriverDeterministic : public ISystemDriver
 {
 public:
     uint32_t random() override;
     std::chrono::steady_clock::time_point now() const override;
+    std::unique_ptr<IMutex> create_mutex() override;
 
     void increment_time(std::chrono::milliseconds dt);
 

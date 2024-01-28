@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ntdcp/system-driver.hpp"
 #include <queue>
 #include <mutex>
 #include <optional>
@@ -7,13 +8,14 @@
 namespace ntdcp
 {
 
-template<typename T, typename MutexType = std::mutex>
+template<typename T>
 class QueueLocking
 {
 public:
-    QueueLocking(size_t max_size = 10) :
+    QueueLocking(ISystemDriver& system_driver, size_t max_size = 10) :
         m_max_size(max_size)
     {
+        m_mutex = system_driver.create_mutex();
     }
 
     size_t size() const
@@ -33,7 +35,7 @@ public:
 
     bool push(const T& obj)
     {
-        std::unique_lock<MutexType> lck(m_mutex);
+        std::unique_lock<IMutex> lck(*m_mutex);
         if (m_queue.size() >= m_max_size)
             return false;
         m_queue.push(obj);
@@ -42,7 +44,7 @@ public:
 
     std::optional<T> pop()
     {
-        std::unique_lock<MutexType> lck(m_mutex);
+        std::unique_lock<IMutex> lck(*m_mutex);
         if (m_queue.empty())
             return std::nullopt;
         T front = m_queue.front();
@@ -51,7 +53,7 @@ public:
     }
 
 private:
-    MutexType m_mutex;
+    std::unique_ptr<IMutex> m_mutex;
     size_t m_max_size;
     std::queue<T> m_queue;
 };

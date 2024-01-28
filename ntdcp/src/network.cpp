@@ -22,11 +22,13 @@ void NetworkLayer::send(Buffer::ptr data, uint64_t destination_addr, uint8_t hop
 
 void NetworkLayer::send(SegmentBuffer data, uint64_t destination_addr, uint8_t hop_limit)
 {
+    uint16_t package_id = random_id();
     if (address_acceptable(destination_addr))
     {
         Package p;
         p.source_addr = m_addr;
         p.data = data.merge();
+        p.package_id = package_id;
         m_incoming.push(p);
 
         if (destination_addr == m_addr) // Package is directly for me
@@ -37,7 +39,7 @@ void NetworkLayer::send(SegmentBuffer data, uint64_t destination_addr, uint8_t h
     PackageHeader package;
     package.source_addr = m_addr;
     package.destination_addr = destination_addr;
-    package.package_id = random_id();
+    package.package_id = package_id;
     package.hop_limit = hop_limit;
 
     m_packages_already_received.check_update(package.package_id);
@@ -93,6 +95,7 @@ void NetworkLayer::serve_incoming()
                 Package p;
                 p.source_addr = header.source_addr;
                 p.data = pkg->second;
+                p.package_id = header.package_id;
                 m_incoming.push(p);
                 continue;
             }
@@ -172,6 +175,7 @@ uint16_t NetworkLayer::random_id()
 
 std::optional<std::pair<NetworkLayer::PackageHeader, Buffer::ptr>> NetworkLayer::decode(const MemBlock& mem_block)
 {
+    // TODO add here size checks
     MemBlock m(mem_block);
     if (mem_block.size() < sizeof(uint8_t))
         return std::nullopt;
@@ -182,13 +186,28 @@ std::optional<std::pair<NetworkLayer::PackageHeader, Buffer::ptr>> NetworkLayer:
     PackageHeader package;
     package.hop_limit = flag_byte >> 4;
     if (package.hop_limit == 0xF)
+    {
+        if (m.size() < sizeof(package.hop_limit))
+            return std::nullopt;
         m >> package.hop_limit;
+    }
+
+    if (m.size() < sizeof(package.package_id))
+        return std::nullopt;
     m >> package.package_id;
 
     uint8_t src_size_bits = flag_byte & 0b11;
     uint8_t dst_size_bits = (flag_byte >> 2) & 0b11;
-    package.source_addr = read_addr_from_mem(m, src_size_bits);
-    package.destination_addr = read_addr_from_mem(m, dst_size_bits);
+
+    auto source_addr = read_addr_from_mem(m, src_size_bits);
+    if (!source_addr)
+        return std::nullopt;
+    package.source_addr = *source_addr;
+
+    auto dst_addr = read_addr_from_mem(m, dst_size_bits);
+    if (!dst_addr)
+        return std::nullopt;
+    package.destination_addr = *dst_addr;
 
     return std::make_pair(package, Buffer::create(m.size(), m.begin()));
 }
@@ -272,19 +291,23 @@ void NetworkLayer::put_address_to_buffer(Buffer::ptr buf, uint64_t addr)
     }
 }
 
-uint64_t NetworkLayer::read_addr_from_mem(MemBlock& data, uint8_t address_size_bits)
+std::optional<uint64_t> NetworkLayer::read_addr_from_mem(MemBlock& data, uint8_t address_size_bits)
 {
     uint64_t result = 0;
     uint8_t x = 0;
     switch(address_size_bits)
     {
     case addr_size::bytes_1:
+        if (data.size() < 1)
+            return std::nullopt;
         uint8_t x;
         data >> x;
         result = x;
         break;
 
     case addr_size::bytes_2:
+        if (data.size() < 2)
+            return std::nullopt;
         data >> x;
         result = x << 8;
         data >> x;
@@ -292,6 +315,8 @@ uint64_t NetworkLayer::read_addr_from_mem(MemBlock& data, uint8_t address_size_b
         break;
 
     case addr_size::bytes_3:
+        if (data.size() < 3)
+            return std::nullopt;
         data >> x;
         result = x << 16;
         data >> x;
@@ -301,6 +326,8 @@ uint64_t NetworkLayer::read_addr_from_mem(MemBlock& data, uint8_t address_size_b
         break;
 
     case addr_size::bytes_4:
+        if (data.size() < 4)
+            return std::nullopt;
         data >> x;
         result = x << 24;
         data >> x;

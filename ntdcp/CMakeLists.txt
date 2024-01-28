@@ -23,7 +23,8 @@ add_library(${PROJECT_NAME}
     ntdcp/socket-datagram.hpp
     src/socket-datagram.cpp
     ntdcp/synchronization.hpp
-    ntdcp/socket-stable.hpp)
+    ntdcp/socket-stable.hpp
+    src/socket-stable.cpp)
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
 

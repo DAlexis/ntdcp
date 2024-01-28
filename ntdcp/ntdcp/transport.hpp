@@ -2,6 +2,8 @@
 
 #include "ntdcp/network.hpp"
 
+#include <set>
+
 namespace ntdcp
 {
 
@@ -30,10 +32,11 @@ class SocketReceiver : public PtrAliases<SocketReceiver>
 {
 public:
     SocketReceiver(uint16_t my_port);
+    virtual ~SocketReceiver() = default;
 
     uint16_t port() const;
 
-    virtual void receive(Buffer::ptr data, uint64_t src_addr, uint8_t header_bits_0) = 0;
+    virtual void receive(Buffer::ptr data, uint64_t src_addr, uint16_t package_id, uint8_t header_bits_0) = 0;
 
 protected:
     uint16_t m_my_port;
@@ -45,26 +48,35 @@ public:
     /// @todo Rewrite this with queue
 
     SocketTransmitter(uint16_t target_port, uint64_t remote_addr, uint8_t hop_limit = 10);
+    virtual ~SocketTransmitter() = default;
     uint16_t remote_port() const;
     uint64_t remote_addr() const;
     uint8_t hop_limit() const;
 
     virtual std::optional<std::pair<uint8_t, SegmentBuffer>> pick_outgoing() = 0;
 
-private:
+protected:
     uint16_t m_remote_port;
     uint16_t m_remote_addr;
     uint8_t m_hop_limit;
 };
 
-class TransportLayer
+class TransportLayer : public PtrAliases<TransportLayer>
 {
 public:
     TransportLayer(NetworkLayer::ptr network);
 
-    void add_receiver(SocketReceiver::ptr socket);
-    void add_transmitter(SocketTransmitter::ptr socket);
+    void add_receiver(SocketReceiver& socket);
+    void add_transmitter(SocketTransmitter& socket);
+
+    void remove_receiver(SocketReceiver& socket);
+    void remove_transmitter(SocketTransmitter& socket);
+
     void serve();
+
+    NetworkLayer& network();
+
+    static std::optional<uint16_t> decode_port(MemBlock& mem, uint8_t port_size_bits);
 
 private:
     struct TransportHeader0
@@ -79,8 +91,8 @@ private:
     void serve_incoming();
     void serve_outgoing();
 
-    std::map<uint16_t, SocketReceiver::wptr> m_receivers;
-    std::list<SocketTransmitter::wptr> m_transmitters;
+    std::map<uint16_t, SocketReceiver*> m_receivers;
+    std::set<SocketTransmitter*> m_transmitters;
     NetworkLayer::ptr m_network;
 };
 

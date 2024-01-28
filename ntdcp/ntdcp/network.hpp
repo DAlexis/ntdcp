@@ -41,6 +41,7 @@ public:
     struct Package
     {
         uint64_t source_addr;
+        uint16_t package_id;
         Buffer::ptr data;
     };
 
@@ -84,7 +85,7 @@ private:
 
     static uint8_t get_addr_size_bits(uint64_t addr);
     static void put_address_to_buffer(Buffer::ptr buf, uint64_t addr);
-    static uint64_t read_addr_from_mem(MemBlock& data, uint8_t address_size_bits);
+    static std::optional<uint64_t> read_addr_from_mem(MemBlock& data, uint8_t address_size_bits);
 
     ChannelLayer m_channel;
     ISystemDriver::ptr m_sys;

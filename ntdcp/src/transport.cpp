@@ -39,14 +39,24 @@ TransportLayer::TransportLayer(NetworkLayer::ptr network) :
 {
 }
 
-void TransportLayer::add_receiver(SocketReceiver::ptr socket)
+void TransportLayer::add_receiver(SocketReceiver& socket)
 {
-    m_receivers[socket->port()] = socket;
+    m_receivers[socket.port()] = &socket;
 }
 
-void TransportLayer::add_transmitter(SocketTransmitter::ptr socket)
+void TransportLayer::add_transmitter(SocketTransmitter& socket)
 {
-    m_transmitters.push_back(socket);
+    m_transmitters.insert(&socket);
+}
+
+void TransportLayer::remove_receiver(SocketReceiver& socket)
+{
+    m_receivers.erase(socket.port());
+}
+
+void TransportLayer::remove_transmitter(SocketTransmitter& socket)
+{
+    m_transmitters.erase(&socket);
 }
 
 void TransportLayer::serve()
@@ -54,6 +64,12 @@ void TransportLayer::serve()
     serve_incoming();
     serve_outgoing();
 }
+
+NetworkLayer& TransportLayer::network()
+{
+    return *m_network;
+}
+
 
 void TransportLayer::serve_incoming()
 {
@@ -72,13 +88,9 @@ void TransportLayer::serve_incoming()
         if (it == m_receivers.end())
             continue;
 
-        if (SocketReceiver::ptr s = it->second.lock())
-        {
-            s->receive(data, source_addr, header.header_byte_0);
-        } else {
-            m_receivers.erase(it);
-            continue;
-        }
+        SocketReceiver& s = *it->second;
+        s.receive(data, source_addr, pkg->package_id, header.header_byte_0);
+
     }
 }
 
@@ -86,23 +98,52 @@ void TransportLayer::serve_outgoing()
 {
     for (auto it = m_transmitters.begin(); it != m_transmitters.end();)
     {
-        if (SocketTransmitter::ptr s = it->lock())
+        SocketTransmitter& s = **it;
+
+        while (auto out = s.pick_outgoing())
         {
-            while (auto out = s->pick_outgoing())
-            {
-                TransportLayer::TransportHeader0 header;
-                header.header_byte_0 = out->first;
-                header.target_port = s->remote_port();
-                SegmentBuffer& seg_buf = out->second;
-                encode_base_header(seg_buf, header);
-                m_network->send(seg_buf, s->remote_addr(), s->hop_limit());
-            }
-            ++it;
-        } else {
-            it = m_transmitters.erase(it);
+            TransportLayer::TransportHeader0 header;
+            header.header_byte_0 = out->first;
+            header.target_port = s.remote_port();
+            SegmentBuffer& seg_buf = out->second;
+            encode_base_header(seg_buf, header);
+            m_network->send(seg_buf, s.remote_addr(), s.hop_limit());
         }
+        ++it;
+
     }
 }
+
+std::optional<uint16_t> TransportLayer::decode_port(MemBlock& mem, uint8_t port_size_bits)
+{
+    uint16_t port;
+    switch(port_size_bits)
+    {
+    case 0b01: // Default port == 1
+        port = 1;
+        break;
+    case 0b10: // Port number <= 255
+    {
+        if (mem.size() < sizeof(uint8_t))
+            return std::nullopt;
+
+        uint8_t port_number = 0;
+        mem >> port_number;
+        port = port_number;
+        break;
+    }
+    case 0b11: // Port number > 255
+        if (mem.size() < sizeof(uint16_t))
+            return std::nullopt;
+
+        mem >> port;
+        break;
+    default:
+        return std::nullopt;
+    }
+    return port;
+}
+
 
 std::optional<std::pair<TransportLayer::TransportHeader0, Buffer::ptr>> TransportLayer::decode_base_header(MemBlock mem)
 {
@@ -111,28 +152,14 @@ std::optional<std::pair<TransportLayer::TransportHeader0, Buffer::ptr>> Transpor
 
     TransportLayer::TransportHeader0 header;
     mem >> header.header_byte_0;
+
     uint8_t dst_port_bits = header.header_byte_0 & 0x03;
-    switch(dst_port_bits)
-    {
-    case 0b01:
-        // Default port == 1
-        header.target_port = 1;
-        return std::make_pair(header, Buffer::create(mem));
-    case 0b10:
-    {
-        // Port number <= 255
-        uint8_t port_number = 0;
-        mem >> port_number;
-        header.target_port = port_number;
-        return std::make_pair(header, Buffer::create(mem));
-    }
-    case 0b11:
-        // Port number > 255
-        mem >> header.target_port;
-        return std::make_pair(header, Buffer::create(mem));
-    default:
+    auto port = decode_port(mem, dst_port_bits);
+    if (!port)
         return std::nullopt;
-    }
+
+    header.target_port = *port;
+    return std::make_pair(header, Buffer::create(mem));
 }
 
 void TransportLayer::encode_base_header(SegmentBuffer& seg_buf, const TransportLayer::TransportHeader0& header)
