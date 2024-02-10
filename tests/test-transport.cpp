@@ -1,8 +1,6 @@
 #include "ntdcp/network.hpp"
 #include "ntdcp/virtual-device.hpp"
 #include "ntdcp/transport.hpp"
-#include "ntdcp/socket-datagram.hpp"
-#include "ntdcp/socket-stable.hpp"
 #include "test-helpers.hpp"
 
 #include <gtest/gtest.h>
@@ -10,6 +8,67 @@
 using namespace ntdcp;
 using namespace std::literals::chrono_literals;
 
+
+TEST(TransoportLevel, ConnectionEstablishing)
+{
+    TransmissionMedium::ptr medium = std::make_shared<TransmissionMedium>();
+    std::shared_ptr<SystemDriverDeterministic> sys = std::make_shared<SystemDriverDeterministic>();
+
+    PhysicalInterfaceOptions opts;
+
+    std::shared_ptr<VirtualPhysicalInterface> phys1 = VirtualPhysicalInterface::create(opts, sys, medium);
+    std::shared_ptr<VirtualPhysicalInterface> phys2 = VirtualPhysicalInterface::create(opts, sys, medium);
+
+    NetworkLayer::ptr net1 = std::make_shared<NetworkLayer>(sys, 123);
+    net1->add_physical(phys1);
+
+    NetworkLayer::ptr net2 = std::make_shared<NetworkLayer>(sys, 321);
+    net2->add_physical(phys2);
+
+
+    auto tr1 = std::make_shared<TransportLayer>(net1);
+    auto tr2 = std::make_shared<TransportLayer>(net2);
+
+
+    Socket initial_socket(*tr1, 321, 300, 10);
+    ASSERT_TRUE(initial_socket.state() == Socket::State::not_connected);
+
+    std::shared_ptr<Socket> accepted_socket;
+
+    Acceptor acc(*tr2, 10, [&accepted_socket](std::shared_ptr<Socket> sock) { accepted_socket = sock; });
+
+    initial_socket.connect();
+    ASSERT_TRUE(initial_socket.busy());
+
+    // Connection request 123:300-->321:10
+    tr1->serve();
+    net1->serve();
+    net2->serve();
+    tr2->serve(); // Create new socker 321:rnd. Connection submit 321:rnd-->123:300
+
+    ASSERT_TRUE(accepted_socket);
+    ASSERT_TRUE(accepted_socket->busy());
+
+    net2->serve();
+    net1->serve();
+    tr1->serve(); // 123:300 received connection submit
+
+    ASSERT_FALSE(initial_socket.busy());
+
+    Socket::Options default_socket_options;
+    sys->increment_time(default_socket_options.force_ack_after + 1ms);
+
+    tr1->serve(); // 123:300 force ack --> 321:rnd
+    net1->serve();
+    net2->serve();
+    tr2->serve(); // 321:rnd receive ack
+    ASSERT_FALSE(accepted_socket->busy());
+
+    ASSERT_TRUE(initial_socket.state() == Socket::State::connected);
+
+}
+
+/*
 TEST(ChannelTest, TransmitReceiveDatagram)
 {
     TransmissionMedium::ptr medium = std::make_shared<TransmissionMedium>();
@@ -162,3 +221,4 @@ TEST(ChannelTest, TransmitReceiveStable)
         EXPECT_EQ(strcmp((const char*) (*in2)->data(), test_string_1), 0);
     }
 }
+*/

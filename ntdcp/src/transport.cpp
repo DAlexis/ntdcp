@@ -2,18 +2,416 @@
 
 using namespace ntdcp;
 
-SocketReceiver::SocketReceiver(uint16_t my_port) :
-    m_my_port(my_port)
+ConnectionId::ConnectionId(uint16_t destination_port, uint64_t source_addr, uint16_t source_port) :
+    source_addr(source_addr), source_port(source_port), destination_port(destination_port)
 {
 }
 
-uint16_t SocketReceiver::port() const
+bool ConnectionId::operator<(const ConnectionId& right) const
 {
-    return m_my_port;
+    if (source_addr != right.source_addr)
+        return source_addr < right.source_addr;
+
+    if (source_port != right.source_port)
+        return source_port < right.source_port;
+
+    return destination_port < right.destination_port;
+}
+
+// ---------------------------
+// SocketBase
+
+SocketBase::SocketBase(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port) :
+    m_transport_layer(transport_layer), m_remote_address(remote_address), m_remote_port(remote_port), m_local_port(local_port)
+{
+}
+
+uint64_t SocketBase::remote_address()
+{
+    return m_remote_address;
+}
+
+uint16_t SocketBase::remote_port()
+{
+    return m_remote_port;
+}
+
+uint16_t SocketBase::local_port()
+{
+    return m_local_port;
 }
 
 
-SocketTransmitter::SocketTransmitter(uint16_t target_port, uint64_t remote_addr, uint8_t hop_limit) :
+ConnectionId SocketBase::incoming_connectiion_id()
+{
+    return ConnectionId(local_port(), remote_address(), remote_port());
+}
+
+SocketBase::~SocketBase()
+{
+}
+
+// ---------------------------
+// Acceptor
+
+Acceptor::Acceptor(TransportLayer& transport_layer, uint16_t listening_port, OnNewConnectionCallback on_new_connection) :
+    SocketBase(transport_layer, 0, listening_port, 0), m_on_new_connection(on_new_connection)
+{
+    m_transport_layer.add_acceptor(*this);
+}
+
+Acceptor::~Acceptor()
+{
+    m_transport_layer.remove_acceptor(*this);
+}
+
+void Acceptor::receive(Buffer::ptr data, const TransportHeader& header)
+{
+    if (header.type == TransportHeader::Type::connection_request)
+    {
+        uint16_t new_port;
+
+        while ((new_port = m_transport_layer.system_driver()->random() & 0xFFFF) == 0);
+
+        auto new_sock = std::make_shared<Socket>(m_transport_layer, header.source_addr, new_port, header.source_port);
+        new_sock->send_connection_submit(header.message_id);
+        m_on_new_connection(new_sock);
+        return;
+    }
+}
+
+std::optional<std::pair<TransportHeader, SegmentBuffer>> Acceptor::pick_outgoing()
+{
+    return std::nullopt;
+}
+
+// ---------------------------
+// Socket
+
+Socket::Socket(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port) :
+    SocketBase(transport_layer, remote_address, local_port, remote_port), m_incoming(*transport_layer.system_driver())
+{
+    m_transport_layer.add_socket(*this);
+}
+
+Socket::~Socket()
+{
+    m_transport_layer.remove_socket(*this);
+}
+
+bool Socket::busy()
+{
+    return m_send_task.has_value();
+}
+
+bool Socket::connect()
+{
+    if (m_state != State::not_connected)
+        return false;
+
+    m_last_outgoing_message_id = 0;
+
+    SendTask task;
+    task.created = m_transport_layer.system_driver()->now();
+    task.header.message_id = ++m_last_outgoing_message_id;
+    task.header.ack_for_message_id = 0;
+    task.header.has_ack = false;
+    task.header.repeat = 1;
+    task.header.type = TransportHeader::Type::connection_request;
+    task.header.destination_addr = m_remote_address;
+    task.header.source_addr = 0;
+    task.header.source_port = m_local_port;
+    task.header.destination_port = m_remote_port;
+
+    m_send_task = task;
+
+    m_state = State::waiting_for_submit;
+
+    return true;
+}
+
+void Socket::send_connection_submit(uint16_t message_id)
+{
+    prepare_ack(message_id);
+    // m_ack_task->force_send_immediately = true;
+
+    m_last_outgoing_message_id = 0;
+
+    SendTask task;
+    task.created = m_transport_layer.system_driver()->now();
+    task.header.message_id = ++m_last_outgoing_message_id;
+    task.header.ack_for_message_id = 0;
+    task.header.has_ack = false;
+    task.header.repeat = 1;
+    task.header.type = TransportHeader::Type::connection_submit;
+    task.header.destination_addr = m_remote_address;
+    task.header.source_addr = 0;
+    task.header.source_port = m_local_port;
+    task.header.destination_port = m_remote_port;
+
+    m_send_task = task;
+
+    m_state = State::connected;
+}
+
+Socket::State Socket::state()
+{
+    return m_state;
+}
+
+void Socket::receive(Buffer::ptr data, const TransportHeader& header)
+{
+    if (header.type == TransportHeader::Type::connection_submit)
+    {
+        if (m_state != State::waiting_for_submit)
+            return;
+
+        m_remote_port = header.source_port;
+        m_state = State::connected;
+        m_send_task.reset();
+        prepare_ack(header.message_id);
+        return;
+    }
+
+    // Check ack
+    if (m_send_task && header.ack_for_message_id == m_send_task->header.message_id)
+    {
+        // We have acknoledgement that our last transmission is OK, so remove it from outgoing
+        m_send_task.reset();
+    }
+
+    if (data->size() == 0)
+        return; // Segment is empty, this is only ack
+
+    prepare_ack(header.message_id);
+
+    if (header.message_id <= m_last_received_message_id)
+        return; // We already got this segment
+
+    m_incoming.push(data);
+    m_last_received_message_id = header.message_id;
+}
+
+void Socket::prepare_ack(uint16_t message_id)
+{
+    if (!m_ack_task)
+        m_ack_task = AckTask();
+
+    m_ack_task->message_id = message_id;
+    m_ack_task->time_seg_received = m_transport_layer.system_driver()->now();
+    m_ack_task->was_sent_at_least_once = false;
+}
+
+std::optional<std::pair<TransportHeader, SegmentBuffer>> Socket::pick_outgoing()
+{
+    // drop_if_timeout();
+    auto now = m_transport_layer.system_driver()->now();
+
+    if (!m_send_task)
+    {
+        // Nothing to send, but may be ack is waiting
+        if (!m_ack_task->was_sent_at_least_once
+            && ((now - m_ack_task->time_seg_received > m_options.force_ack_after)
+                || m_ack_task->force_send_immediately))
+        {
+            // Need to force ack
+            TransportHeader hdr;
+            hdr.ack_for_message_id = m_ack_task->message_id;
+            hdr.message_id = 0;
+            hdr.has_ack = true;
+            hdr.repeat = 1;
+            hdr.type = TransportHeader::Type::data_transfer;
+            hdr.destination_addr = m_remote_address;
+            hdr.destination_port = m_remote_port;
+            hdr.source_port = m_local_port;
+            hdr.source_addr = 0;
+
+            m_ack_task->was_sent_at_least_once = true;
+
+            return std::make_pair(hdr, SegmentBuffer());
+        }
+
+        return std::nullopt;
+    }
+
+    // If now a time to transmit
+    if (m_send_task->sent_count != 0 && now - m_send_task->last_pick < m_options.restransmission_time)
+        return std::nullopt;
+
+    m_send_task->last_pick = now;
+    m_send_task->sent_count++;
+
+    SegmentBuffer sg(m_send_task->buf);
+
+    m_send_task->header.ack_for_message_id = m_ack_task->message_id;
+    m_ack_task->was_sent_at_least_once = true;
+
+    return std::make_pair(m_send_task->header, sg);
+}
+
+
+// ---------------------------
+// TransportLayer
+
+TransportLayer::TransportLayer(NetworkLayer::ptr network) :
+    m_network(network)
+{
+
+}
+
+void TransportLayer::add_socket(Socket& socket)
+{
+    m_sockets.insert(&socket);
+}
+
+void TransportLayer::remove_socket(Socket& socket)
+{
+    m_sockets.erase(&socket);
+}
+
+void TransportLayer::add_acceptor(Acceptor& acceptor)
+{
+    m_acceptors[acceptor.local_port()] = &acceptor;
+}
+
+void TransportLayer::remove_acceptor(Acceptor& acceptor)
+{
+    m_acceptors.erase(acceptor.local_port());
+}
+
+void TransportLayer::serve()
+{
+    serve_incoming();
+    serve_outgoing();
+}
+
+ISystemDriver::ptr TransportLayer::system_driver()
+{
+    return m_network->system_driver();
+}
+
+void TransportLayer::serve_incoming()
+{
+    while (std::optional<NetworkLayer::Package> pkg = m_network->incoming())
+    {
+        uint64_t source_addr = pkg->source_addr;
+        Buffer::ptr pkg_data = pkg->data;
+        std::optional<std::pair<TransportHeader, Buffer::ptr>> p = decode(pkg_data->contents());
+        if (!p)
+            continue;
+
+        TransportHeader& header = p->first;
+        header.source_addr = source_addr;
+
+        Buffer::ptr data = p->second;
+
+        SocketBase* s = nullptr;
+
+        if (header.type == TransportHeader::Type::connection_request)
+        {
+            s = find_acceptor(header.destination_port);
+        } else if (header.type == TransportHeader::Type::connection_submit)
+        {
+            s = find_socket_for_submit(header.source_addr, header.destination_port);
+        } else {
+            s = find_socket_for_data(header.source_addr, header.source_port, header.destination_port);
+        }
+        if (!s)
+            continue;
+
+        s->receive(data, header);
+    }
+}
+
+void TransportLayer::serve_outgoing()
+{
+    for (auto it = m_sockets.begin(); it != m_sockets.end(); ++it)
+    {
+        Socket* s = *it;
+
+        while (auto out = s->pick_outgoing())
+        {
+            const TransportHeader& header = out->first;
+            SegmentBuffer& seg_buf = out->second;
+
+            encode(seg_buf, header);
+            m_network->send(seg_buf, s->remote_address());
+        }
+    }
+}
+
+Acceptor* TransportLayer::find_acceptor(uint16_t port)
+{
+    auto it = m_acceptors.find(port);
+    if (it != m_acceptors.end())
+        return it->second;
+    else
+        return nullptr;
+}
+
+Socket* TransportLayer::find_socket_for_data(uint64_t source_addr, uint16_t source_port, uint16_t dst_port)
+{
+    for (auto s : m_sockets)
+    {
+        if (s->state() != Socket::State::connected)
+            continue;
+        if (s->remote_address() == source_addr && s->remote_port() == source_port && s->local_port() == dst_port)
+            return s;
+    }
+    return nullptr;
+}
+
+Socket* TransportLayer::find_socket_for_submit(uint64_t source_addr, uint16_t dst_port)
+{
+    for (auto s : m_sockets)
+    {
+        if (s->state() != Socket::State::waiting_for_submit)
+            continue;
+
+        if (s->remote_address() == source_addr && s->local_port() == dst_port)
+            return s;
+    }
+    return nullptr;
+}
+
+std::optional<std::pair<TransportHeader, Buffer::ptr>> TransportLayer::decode(MemBlock mem)
+{
+    // Trivial impl
+    if (mem.size() < sizeof(TransportHeader))
+        return std::nullopt;
+
+    TransportHeader header;
+    mem >> header;
+    return std::make_pair(header, Buffer::create(mem));
+}
+
+void TransportLayer::encode(SegmentBuffer& seg_buf, const TransportHeader& header)
+{
+    // Trivial impl
+    auto b = Buffer::create();
+    b->raw() << header;
+    seg_buf.push_front(b);
+}
+
+
+/*
+SocketBase::SocketBase(const ConnectionId& conn_id) :
+    m_connection_id(conn_id)
+{
+}
+
+const ConnectionId& SocketBase::connection_id()
+{
+    return m_connection_id;
+}
+
+SocketReceiver::SocketReceiver(const ConnectionId& conn_id) :
+    SocketBase(conn_id)
+{
+}
+
+
+SocketTransmitter::SocketTransmitter(const ConnectionId& conn_id, uint8_t hop_limit) :
     m_remote_port(target_port), m_remote_addr(remote_addr), m_hop_limit(hop_limit)
 {
 }
@@ -183,3 +581,4 @@ void TransportLayer::encode_base_header(SegmentBuffer& seg_buf, const TransportL
     }
     seg_buf.push_front(b);
 }
+*/
