@@ -83,6 +83,9 @@ void TransmissionMedium::add_client(std::shared_ptr<VirtualPhysicalInterface> cl
 
 void TransmissionMedium::send(Buffer::ptr data, std::shared_ptr<VirtualPhysicalInterface> sender)
 {
+    if (m_broken)
+        return;
+
     for (size_t i = 0; i < m_clients.size(); i++)
     {
         if (auto client = m_clients[i].lock())
@@ -97,4 +100,9 @@ void TransmissionMedium::send(Buffer::ptr data, std::shared_ptr<VirtualPhysicalI
             i--;
         }
     }
+}
+
+void TransmissionMedium::set_broken(bool broken)
+{
+    m_broken = broken;
 }

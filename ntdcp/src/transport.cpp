@@ -111,19 +111,7 @@ bool Socket::connect()
 
     m_last_outgoing_message_id = 0;
 
-    SendTask task;
-    task.created = m_transport_layer.system_driver()->now();
-    task.header.message_id = ++m_last_outgoing_message_id;
-    task.header.ack_for_message_id = 0;
-    task.header.has_ack = false;
-    task.header.repeat = 1;
-    task.header.type = TransportHeader::Type::connection_request;
-    task.header.destination_addr = m_remote_address;
-    task.header.source_addr = 0;
-    task.header.source_port = m_local_port;
-    task.header.destination_port = m_remote_port;
-
-    m_send_task = task;
+    create_send_task(0, TransportHeader::Type::connection_request, nullptr);
 
     m_state = State::waiting_for_submit;
 
@@ -137,21 +125,42 @@ void Socket::send_connection_submit(uint16_t message_id)
 
     m_last_outgoing_message_id = 0;
 
-    SendTask task;
-    task.created = m_transport_layer.system_driver()->now();
-    task.header.message_id = ++m_last_outgoing_message_id;
-    task.header.ack_for_message_id = 0;
-    task.header.has_ack = false;
-    task.header.repeat = 1;
-    task.header.type = TransportHeader::Type::connection_submit;
-    task.header.destination_addr = m_remote_address;
-    task.header.source_addr = 0;
-    task.header.source_port = m_local_port;
-    task.header.destination_port = m_remote_port;
-
-    m_send_task = task;
+    create_send_task(0, TransportHeader::Type::connection_submit, nullptr);
 
     m_state = State::connected;
+}
+
+bool Socket::send(Buffer::ptr data)
+{
+    if (m_state != Socket::State::connected)
+        return false;
+
+    if (busy())
+        return false;
+
+    create_send_task(0, TransportHeader::Type::data_transfer, data);
+
+    return true;
+}
+
+bool Socket::has_data()
+{
+    return !m_incoming.empty();
+}
+
+std::optional<Buffer::ptr> Socket::get_received()
+{
+    return m_incoming.pop();
+}
+
+void Socket::close()
+{
+    if (m_state != Socket::State::connected && m_state != Socket::State::closed)
+        return;
+
+    create_send_task(0, TransportHeader::Type::connection_close, nullptr);
+
+    m_state = Socket::State::closed;
 }
 
 Socket::State Socket::state()
@@ -161,6 +170,22 @@ Socket::State Socket::state()
 
 void Socket::receive(Buffer::ptr data, const TransportHeader& header)
 {
+    if (m_state == Socket::State::closed)
+    {
+        // We received something after connetion closing
+        if (header.type == TransportHeader::Type::connection_close_submit)
+        {
+            // This is close submit, OK, will not send anything
+            m_send_task.reset();
+            m_ack_task.reset();
+            return;
+        }
+
+        // And this is not a close submit, lets send close submit that should never have answer
+        create_send_task(0, TransportHeader::Type::connection_close_submit, nullptr);
+        return;
+    }
+
     if (header.type == TransportHeader::Type::connection_submit)
     {
         if (m_state != State::waiting_for_submit)
@@ -170,6 +195,13 @@ void Socket::receive(Buffer::ptr data, const TransportHeader& header)
         m_state = State::connected;
         m_send_task.reset();
         prepare_ack(header.message_id);
+        return;
+    }
+
+    if (header.type == TransportHeader::Type::connection_close)
+    {
+        m_state = State::closed;
+        create_send_task(0, TransportHeader::Type::connection_close_submit, nullptr);
         return;
     }
 
@@ -200,6 +232,22 @@ void Socket::prepare_ack(uint16_t message_id)
     m_ack_task->message_id = message_id;
     m_ack_task->time_seg_received = m_transport_layer.system_driver()->now();
     m_ack_task->was_sent_at_least_once = false;
+}
+
+void Socket::create_send_task(uint16_t ack_for_message_id, TransportHeader::Type type, Buffer::ptr buf)
+{
+    m_send_task = SendTask();
+    m_send_task->created = m_transport_layer.system_driver()->now();
+    m_send_task->header.message_id = ++m_last_outgoing_message_id;
+    m_send_task->header.ack_for_message_id = ack_for_message_id;
+    m_send_task->header.has_ack = (ack_for_message_id != 0);
+    m_send_task->header.repeat = 1;
+    m_send_task->header.type = type;
+    m_send_task->header.destination_addr = m_remote_address;
+    m_send_task->header.source_addr = 0;
+    m_send_task->header.source_port = m_local_port;
+    m_send_task->header.destination_port = m_remote_port;
+    m_send_task->buf = buf;
 }
 
 std::optional<std::pair<TransportHeader, SegmentBuffer>> Socket::pick_outgoing()
@@ -243,8 +291,11 @@ std::optional<std::pair<TransportHeader, SegmentBuffer>> Socket::pick_outgoing()
 
     SegmentBuffer sg(m_send_task->buf);
 
-    m_send_task->header.ack_for_message_id = m_ack_task->message_id;
-    m_ack_task->was_sent_at_least_once = true;
+    if (m_ack_task)
+    {
+        m_send_task->header.ack_for_message_id = m_ack_task->message_id;
+        m_ack_task->was_sent_at_least_once = true;
+    }
 
     return std::make_pair(m_send_task->header, sg);
 }
@@ -307,15 +358,21 @@ void TransportLayer::serve_incoming()
 
         SocketBase* s = nullptr;
 
-        if (header.type == TransportHeader::Type::connection_request)
+        switch(header.type)
         {
+        case TransportHeader::Type::connection_request:
             s = find_acceptor(header.destination_port);
-        } else if (header.type == TransportHeader::Type::connection_submit)
-        {
+            break;
+        case TransportHeader::Type::connection_submit:
             s = find_socket_for_submit(header.source_addr, header.destination_port);
-        } else {
+            break;
+        case TransportHeader::Type::connection_close_submit:
+            s = find_socket_for_close_submit(header.source_addr, header.source_port, header.destination_port);
+            break;
+        default:
             s = find_socket_for_data(header.source_addr, header.source_port, header.destination_port);
         }
+
         if (!s)
             continue;
 
@@ -354,6 +411,18 @@ Socket* TransportLayer::find_socket_for_data(uint64_t source_addr, uint16_t sour
     for (auto s : m_sockets)
     {
         if (s->state() != Socket::State::connected)
+            continue;
+        if (s->remote_address() == source_addr && s->remote_port() == source_port && s->local_port() == dst_port)
+            return s;
+    }
+    return nullptr;
+}
+
+Socket* TransportLayer::find_socket_for_close_submit(uint64_t source_addr, uint16_t source_port, uint16_t dst_port)
+{
+    for (auto s : m_sockets)
+    {
+        if (s->state() != Socket::State::closed)
             continue;
         if (s->remote_address() == source_addr && s->remote_port() == source_port && s->local_port() == dst_port)
             return s;

@@ -50,7 +50,9 @@ struct TransportHeader
         broadcast,
         connection_request,
         connection_submit,
-        data_transfer
+        data_transfer,
+        connection_close,
+        connection_close_submit
     };
 
     uint64_t source_addr = 0;
@@ -116,14 +118,21 @@ public:
     {
         not_connected,
         waiting_for_submit,
-        connected
+        connected,
+        closed
     };
 
     Socket(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port);
     ~Socket();
+
     bool busy();
     bool connect();
     void send_connection_submit(uint16_t message_id);
+    bool send(Buffer::ptr data);
+    bool has_data();
+    std::optional<Buffer::ptr> get_received();
+
+    void close();
 
     State state();
 
@@ -150,6 +159,7 @@ private:
     };
 
     void prepare_ack(uint16_t message_id);
+    void create_send_task(uint16_t ack_for_message_id, TransportHeader::Type type, Buffer::ptr buf);
 
     Options m_options;
 
@@ -200,6 +210,7 @@ private:
 
     Acceptor* find_acceptor(uint16_t port);
     Socket* find_socket_for_data(uint64_t source_addr, uint16_t source_port, uint16_t dst_port);
+    Socket* find_socket_for_close_submit(uint64_t source_addr, uint16_t source_port, uint16_t dst_port);
     Socket* find_socket_for_submit(uint64_t source_addr, uint16_t dst_port);
 
     NetworkLayer::ptr m_network;
