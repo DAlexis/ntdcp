@@ -65,9 +65,9 @@ Acceptor::~Acceptor()
     m_transport_layer.remove_acceptor(*this);
 }
 
-void Acceptor::receive(Buffer::ptr data, const TransportHeader& header)
+void Acceptor::receive(Buffer::ptr data, const TransportDescription& header)
 {
-    if (header.type == TransportHeader::Type::connection_request)
+    if (header.type == TransportDescription::Type::connection_request)
     {
         uint16_t new_port;
 
@@ -80,7 +80,7 @@ void Acceptor::receive(Buffer::ptr data, const TransportHeader& header)
     }
 }
 
-std::optional<std::pair<TransportHeader, SegmentBuffer>> Acceptor::pick_outgoing()
+std::optional<std::pair<TransportDescription, SegmentBuffer>> Acceptor::pick_outgoing()
 {
     return std::nullopt;
 }
@@ -111,7 +111,7 @@ bool Socket::connect()
 
     m_last_outgoing_message_id = 0;
 
-    create_send_task(0, TransportHeader::Type::connection_request, nullptr);
+    create_send_task(0, TransportDescription::Type::connection_request, nullptr);
 
     m_state = State::waiting_for_submit;
 
@@ -125,7 +125,7 @@ void Socket::send_connection_submit(uint16_t message_id)
 
     m_last_outgoing_message_id = 0;
 
-    create_send_task(0, TransportHeader::Type::connection_submit, nullptr);
+    create_send_task(0, TransportDescription::Type::connection_submit, nullptr);
 
     m_state = State::connected;
 }
@@ -138,7 +138,7 @@ bool Socket::send(Buffer::ptr data)
     if (busy())
         return false;
 
-    create_send_task(0, TransportHeader::Type::data_transfer, data);
+    create_send_task(0, TransportDescription::Type::data_transfer, data);
 
     return true;
 }
@@ -158,7 +158,7 @@ void Socket::close()
     if (m_state != Socket::State::connected && m_state != Socket::State::closed)
         return;
 
-    create_send_task(0, TransportHeader::Type::connection_close, nullptr);
+    create_send_task(0, TransportDescription::Type::connection_close, nullptr);
 
     m_state = Socket::State::closed;
 }
@@ -168,25 +168,44 @@ Socket::State Socket::state()
     return m_state;
 }
 
-void Socket::receive(Buffer::ptr data, const TransportHeader& header)
+uint16_t Socket::unconfirmed_to_remote()
 {
+    return m_unconfirmed_to_remote;
+}
+
+uint16_t Socket::missed_from_remote()
+{
+    return m_missed_from_remote;
+}
+
+void Socket::receive(Buffer::ptr data, const TransportDescription& header)
+{
+    // Check ack
+    if (m_send_task && header.ack_for_message_id == m_send_task->header.message_id)
+    {
+        // We have acknoledgement that our last transmission is OK, so remove it from outgoing
+        m_send_task.reset();
+        m_unconfirmed_to_remote--;
+    }
+
     if (m_state == Socket::State::closed)
     {
         // We received something after connetion closing
-        if (header.type == TransportHeader::Type::connection_close_submit)
+        if (header.type == TransportDescription::Type::connection_close_submit)
         {
             // This is close submit, OK, will not send anything
             m_send_task.reset();
             m_ack_task.reset();
+            m_unconfirmed_to_remote--;
             return;
         }
 
         // And this is not a close submit, lets send close submit that should never have answer
-        create_send_task(0, TransportHeader::Type::connection_close_submit, nullptr);
+        create_send_task(m_send_task->header.message_id, TransportDescription::Type::connection_close_submit, nullptr);
         return;
     }
 
-    if (header.type == TransportHeader::Type::connection_submit)
+    if (header.type == TransportDescription::Type::connection_submit)
     {
         if (m_state != State::waiting_for_submit)
             return;
@@ -195,32 +214,28 @@ void Socket::receive(Buffer::ptr data, const TransportHeader& header)
         m_state = State::connected;
         m_send_task.reset();
         prepare_ack(header.message_id);
+        m_last_received_message_id = header.message_id;
         return;
     }
 
-    if (header.type == TransportHeader::Type::connection_close)
+    if (header.type == TransportDescription::Type::connection_close)
     {
         m_state = State::closed;
-        create_send_task(0, TransportHeader::Type::connection_close_submit, nullptr);
+        create_send_task(0, TransportDescription::Type::connection_close_submit, nullptr);
+        m_last_received_message_id = header.message_id;
         return;
     }
-
-    // Check ack
-    if (m_send_task && header.ack_for_message_id == m_send_task->header.message_id)
-    {
-        // We have acknoledgement that our last transmission is OK, so remove it from outgoing
-        m_send_task.reset();
-    }
-
-    if (data->size() == 0)
-        return; // Segment is empty, this is only ack
-
-    prepare_ack(header.message_id);
 
     if (header.message_id <= m_last_received_message_id)
         return; // We already got this segment
 
-    m_incoming.push(data);
+    if (data->size() != 0)
+    {
+        prepare_ack(header.message_id);
+        m_incoming.push(data);
+    }
+
+    m_missed_from_remote += header.message_id - (m_last_received_message_id + 1);
     m_last_received_message_id = header.message_id;
 }
 
@@ -234,11 +249,11 @@ void Socket::prepare_ack(uint16_t message_id)
     m_ack_task->was_sent_at_least_once = false;
 }
 
-void Socket::create_send_task(uint16_t ack_for_message_id, TransportHeader::Type type, Buffer::ptr buf)
+void Socket::create_send_task(uint16_t ack_for_message_id, TransportDescription::Type type, Buffer::ptr buf)
 {
     m_send_task = SendTask();
     m_send_task->created = m_transport_layer.system_driver()->now();
-    m_send_task->header.message_id = ++m_last_outgoing_message_id;
+    m_send_task->header.message_id = type == TransportDescription::Type::connection_request ? 0 : ++m_last_outgoing_message_id;
     m_send_task->header.ack_for_message_id = ack_for_message_id;
     m_send_task->header.has_ack = (ack_for_message_id != 0);
     m_send_task->header.repeat = 1;
@@ -248,9 +263,30 @@ void Socket::create_send_task(uint16_t ack_for_message_id, TransportHeader::Type
     m_send_task->header.source_port = m_local_port;
     m_send_task->header.destination_port = m_remote_port;
     m_send_task->buf = buf;
+
+    if (type != TransportDescription::Type::connection_close_submit)
+        m_unconfirmed_to_remote++;
 }
 
-std::optional<std::pair<TransportHeader, SegmentBuffer>> Socket::pick_outgoing()
+std::optional<std::pair<TransportDescription, SegmentBuffer>> Socket::pick_force_ack()
+{
+    TransportDescription hdr;
+    hdr.ack_for_message_id = m_ack_task->message_id;
+    hdr.message_id = 0;
+    hdr.has_ack = true;
+    hdr.repeat = 1;
+    hdr.type = TransportDescription::Type::data_transfer;
+    hdr.destination_addr = m_remote_address;
+    hdr.destination_port = m_remote_port;
+    hdr.source_port = m_local_port;
+    hdr.source_addr = 0;
+
+    m_ack_task->was_sent_at_least_once = true;
+
+    return std::make_pair(hdr, SegmentBuffer());
+}
+
+std::optional<std::pair<TransportDescription, SegmentBuffer>> Socket::pick_outgoing()
 {
     // drop_if_timeout();
     auto now = m_transport_layer.system_driver()->now();
@@ -263,20 +299,7 @@ std::optional<std::pair<TransportHeader, SegmentBuffer>> Socket::pick_outgoing()
                 || m_ack_task->force_send_immediately))
         {
             // Need to force ack
-            TransportHeader hdr;
-            hdr.ack_for_message_id = m_ack_task->message_id;
-            hdr.message_id = 0;
-            hdr.has_ack = true;
-            hdr.repeat = 1;
-            hdr.type = TransportHeader::Type::data_transfer;
-            hdr.destination_addr = m_remote_address;
-            hdr.destination_port = m_remote_port;
-            hdr.source_port = m_local_port;
-            hdr.source_addr = 0;
-
-            m_ack_task->was_sent_at_least_once = true;
-
-            return std::make_pair(hdr, SegmentBuffer());
+            return pick_force_ack();
         }
 
         return std::nullopt;
@@ -347,11 +370,11 @@ void TransportLayer::serve_incoming()
     {
         uint64_t source_addr = pkg->source_addr;
         Buffer::ptr pkg_data = pkg->data;
-        std::optional<std::pair<TransportHeader, Buffer::ptr>> p = decode(pkg_data->contents());
+        std::optional<std::pair<TransportDescription, Buffer::ptr>> p = decode(pkg_data->contents());
         if (!p)
             continue;
 
-        TransportHeader& header = p->first;
+        TransportDescription& header = p->first;
         header.source_addr = source_addr;
 
         Buffer::ptr data = p->second;
@@ -360,13 +383,13 @@ void TransportLayer::serve_incoming()
 
         switch(header.type)
         {
-        case TransportHeader::Type::connection_request:
+        case TransportDescription::Type::connection_request:
             s = find_acceptor(header.destination_port);
             break;
-        case TransportHeader::Type::connection_submit:
+        case TransportDescription::Type::connection_submit:
             s = find_socket_for_submit(header.source_addr, header.destination_port);
             break;
-        case TransportHeader::Type::connection_close_submit:
+        case TransportDescription::Type::connection_close_submit:
             s = find_socket_for_close_submit(header.source_addr, header.source_port, header.destination_port);
             break;
         default:
@@ -388,7 +411,7 @@ void TransportLayer::serve_outgoing()
 
         while (auto out = s->pick_outgoing())
         {
-            const TransportHeader& header = out->first;
+            const TransportDescription& header = out->first;
             SegmentBuffer& seg_buf = out->second;
 
             encode(seg_buf, header);
@@ -443,18 +466,18 @@ Socket* TransportLayer::find_socket_for_submit(uint64_t source_addr, uint16_t ds
     return nullptr;
 }
 
-std::optional<std::pair<TransportHeader, Buffer::ptr>> TransportLayer::decode(MemBlock mem)
+std::optional<std::pair<TransportDescription, Buffer::ptr>> TransportLayer::decode(MemBlock mem)
 {
     // Trivial impl
-    if (mem.size() < sizeof(TransportHeader))
+    if (mem.size() < sizeof(TransportDescription))
         return std::nullopt;
 
-    TransportHeader header;
+    TransportDescription header;
     mem >> header;
     return std::make_pair(header, Buffer::create(mem));
 }
 
-void TransportLayer::encode(SegmentBuffer& seg_buf, const TransportHeader& header)
+void TransportLayer::encode(SegmentBuffer& seg_buf, const TransportDescription& header)
 {
     // Trivial impl
     auto b = Buffer::create();

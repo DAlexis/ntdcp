@@ -4,38 +4,75 @@
 #include "test-helpers.hpp"
 
 #include <gtest/gtest.h>
+#include <cstdlib>
+
 
 using namespace ntdcp;
 using namespace std::literals::chrono_literals;
-/*
+
 class ExchangeSimulation
 {
 public:
-
-    TransmissionMedium::ptr medium{std::make_shared<TransmissionMedium>()};
-    std::shared_ptr<SystemDriverDeterministic> sys{std::make_shared<SystemDriverDeterministic>()};
-
     struct Client
     {
         Client(TransmissionMedium::ptr medium, ISystemDriver::ptr sys, uint64_t addr) :
             phys(VirtualPhysicalInterface::create(PhysicalInterfaceOptions(), sys, medium)),
-            net(std::make_shared<NetworkLayer>(sys, addr))
+            net(std::make_shared<NetworkLayer>(sys, addr)),
+            transport(std::make_shared<TransportLayer>(net))
         {
+            net->add_physical(phys);
         }
 
         void add_acceptor(uint16_t listening_port)
         {
-            acceptors[listening_port] = Acceptor();
+            auto emp = acceptors.emplace(listening_port, Acceptor(
+                *transport,
+                listening_port,
+                [this](std::shared_ptr<Socket> sock)
+                {
+                    accepted_sockets[sock->local_port()] = sock;
+                }
+            ));
+            transport->add_acceptor(emp.first->second);
+        }
+
+        void add_initial_socket(uint64_t remote_addr, uint16_t local_port, uint16_t remote_port)
+        {
+            initial_sockets.emplace(local_port, std::make_shared<Socket>(*transport, remote_addr, local_port, remote_port));
+        }
+
+        void serve()
+        {
+            transport->serve();
+            net->serve();
         }
 
         std::shared_ptr<VirtualPhysicalInterface> phys;
         NetworkLayer::ptr net;
+        TransportLayer::ptr transport;
 
         std::map<uint16_t, std::shared_ptr<Socket>> accepted_sockets;
         std::map<uint16_t, std::shared_ptr<Socket>> initial_sockets;
         std::map<uint16_t, Acceptor> acceptors;
     };
-};*/
+
+    Client& add_client(uint64_t addr)
+    {
+        return clients.emplace(addr, Client(medium, sys, addr)).first->second;
+    }
+
+    void serve_all()
+    {
+        for (auto it = clients.begin(); it != clients.end(); ++it)
+        {
+            it->second.serve();
+        }
+    }
+
+    TransmissionMedium::ptr medium{std::make_shared<TransmissionMedium>()};
+    std::shared_ptr<SystemDriverDeterministic> sys{std::make_shared<SystemDriverDeterministic>()};
+    std::map<uint64_t, Client> clients;
+};
 
 TEST(TransoportLevel, ConnectionLifecycle)
 {
@@ -66,6 +103,8 @@ TEST(TransoportLevel, ConnectionLifecycle)
     Acceptor acc(*tr2, 10, [&accepted_socket](std::shared_ptr<Socket> sock) { accepted_socket = sock; });
 
     initial_socket.connect();
+    EXPECT_EQ(initial_socket.unconfirmed_to_remote(), 1);
+    EXPECT_EQ(initial_socket.missed_from_remote(), 0);
     ASSERT_TRUE(initial_socket.busy());
 
     // Connection request 123:300-->321:10
@@ -76,12 +115,15 @@ TEST(TransoportLevel, ConnectionLifecycle)
 
     ASSERT_TRUE(accepted_socket);
     ASSERT_TRUE(accepted_socket->busy());
+    EXPECT_EQ(accepted_socket->unconfirmed_to_remote(), 1);
 
     net2->serve();
     net1->serve();
     tr1->serve(); // 123:300 received connection submit
 
     ASSERT_FALSE(initial_socket.busy());
+    EXPECT_EQ(initial_socket.unconfirmed_to_remote(), 0);
+    EXPECT_EQ(initial_socket.missed_from_remote(), 0);
 
     Socket::Options default_socket_options;
     sys->increment_time(default_socket_options.force_ack_after + 1ms);
@@ -91,6 +133,9 @@ TEST(TransoportLevel, ConnectionLifecycle)
     net2->serve();
     tr2->serve(); // 321:rnd receive ack
     ASSERT_FALSE(accepted_socket->busy());
+    EXPECT_EQ(accepted_socket->unconfirmed_to_remote(), 0);
+    EXPECT_EQ(initial_socket.missed_from_remote(), 0);
+    EXPECT_EQ(accepted_socket->missed_from_remote(), 0);
 
     ASSERT_TRUE(initial_socket.state() == Socket::State::connected);
 
@@ -103,6 +148,7 @@ TEST(TransoportLevel, ConnectionLifecycle)
 
     ASSERT_TRUE(accepted_socket->has_data());
     ASSERT_TRUE(initial_socket.busy());
+    EXPECT_EQ(accepted_socket->missed_from_remote(), 0);
 
     auto incoming = accepted_socket->get_received();
 
@@ -116,6 +162,10 @@ TEST(TransoportLevel, ConnectionLifecycle)
     net2->serve();
     net1->serve();
     tr1->serve(); // 123:300 receive ack
+
+    EXPECT_EQ(initial_socket.missed_from_remote(), 0);
+    EXPECT_EQ(accepted_socket->missed_from_remote(), 0);
+    EXPECT_EQ(accepted_socket->unconfirmed_to_remote(), 0);
 
     ASSERT_FALSE(initial_socket.busy());
 
@@ -132,6 +182,10 @@ TEST(TransoportLevel, ConnectionLifecycle)
     net2->serve();
     net1->serve();
     tr1->serve(); // 123:300 receive data
+
+    EXPECT_EQ(initial_socket.missed_from_remote(), 0);
+    EXPECT_EQ(accepted_socket->missed_from_remote(), 0);
+    EXPECT_EQ(accepted_socket->unconfirmed_to_remote(), 1);
 
     ASSERT_FALSE(initial_socket.busy());
     ASSERT_TRUE(initial_socket.has_data());
@@ -150,6 +204,9 @@ TEST(TransoportLevel, ConnectionLifecycle)
     net1->serve();
     net2->serve();
     tr2->serve(); // 321:rnd receive ack
+
+    EXPECT_EQ(accepted_socket->missed_from_remote(), 0);
+    EXPECT_EQ(accepted_socket->unconfirmed_to_remote(), 0);
 
     ASSERT_FALSE(accepted_socket->busy());
 
@@ -172,165 +229,61 @@ TEST(TransoportLevel, ConnectionLifecycle)
 
     sys->increment_time(default_socket_options.restransmission_time + 1ms);
 
+    EXPECT_EQ(initial_socket.missed_from_remote(), 0);
+    EXPECT_EQ(initial_socket.unconfirmed_to_remote(), 0);
+
+    // These fail
+    EXPECT_EQ(accepted_socket->missed_from_remote(), 0);
+    EXPECT_EQ(accepted_socket->unconfirmed_to_remote(), 0);
+
     ASSERT_TRUE(accepted_socket->pick_outgoing() == std::nullopt); // Nothing should be sent because close submit received
 }
 
 TEST(TransoportLevel, NotStableTransmission)
 {
+    ExchangeSimulation sim;
+    const int clients_count = 10;
+    const int sockets_count = 5;
+    const int cycles_count = 1000;
 
-}
-
-/*
-TEST(ChannelTest, TransmitReceiveDatagram)
-{
-    TransmissionMedium::ptr medium = std::make_shared<TransmissionMedium>();
-    ISystemDriver::ptr sys = std::make_shared<SystemDriverDeterministic>();
-
-    PhysicalInterfaceOptions opts;
-
-    std::shared_ptr<VirtualPhysicalInterface> phys1 = VirtualPhysicalInterface::create(opts, sys, medium);
-    std::shared_ptr<VirtualPhysicalInterface> phys2 = VirtualPhysicalInterface::create(opts, sys, medium);
-
-    NetworkLayer::ptr net1 = std::make_shared<NetworkLayer>(sys, 123);
-    net1->add_physical(phys1);
-
-    NetworkLayer::ptr net2 = std::make_shared<NetworkLayer>(sys, 321);
-    net2->add_physical(phys2);
-
-
-    auto tr1 = std::make_shared<TransportLayer>(net1);
-    auto tr2 = std::make_shared<TransportLayer>(net2);
-
-    // Transmitters
-    auto sock_trans_1_p10 = std::make_shared<SocketTransmitterDatagram>(tr1, 10, 321);
-    auto sock_trans_1_p1 = std::make_shared<SocketTransmitterDatagram>(tr1, 1, 321);
-    auto sock_trans_1_p9999 = std::make_shared<SocketTransmitterDatagram>(tr1, 9999, 321);
-
-
-    // Receivers
-    auto sock_recv_2_p10 = std::make_shared<SocketReceiverDatagram>(tr2, 10);
-    auto sock_recv_2_p1 = std::make_shared<SocketReceiverDatagram>(tr2);
-    auto sock_recv_2_p9999 = std::make_shared<SocketReceiverDatagram>(tr2, 9999);
-
+    for (int i = 1; i <= clients_count; i++)
     {
-        sock_trans_1_p10->send(Buffer::create_from_string(test_string_1));
-        tr1->serve();
-        net1->serve();
-        net2->serve();
-        tr2->serve();
-        ASSERT_TRUE(sock_recv_2_p10->has_incoming());
-        ASSERT_FALSE(sock_recv_2_p1->has_incoming());
-        ASSERT_FALSE(sock_recv_2_p9999->has_incoming());
-        auto in2 = sock_recv_2_p10->get_incoming();
-        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_1), 0);
-    }
-
-
-    {
-        sock_trans_1_p10->send(Buffer::create_from_string(test_string_2));
-        sock_trans_1_p1->send(Buffer::create_from_string(test_string_1));
-        sock_trans_1_p9999->send(Buffer::create_from_string(test_string_3));
-
-        tr1->serve();
-        net1->serve();
-        net2->serve();
-        tr2->serve();
-
-        ASSERT_TRUE(sock_recv_2_p10->has_incoming());
-        ASSERT_TRUE(sock_recv_2_p1->has_incoming());
-        ASSERT_TRUE(sock_recv_2_p9999->has_incoming());
-        auto in2 = sock_recv_2_p10->get_incoming();
-        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_2), 0);
-        in2 = sock_recv_2_p1->get_incoming();
-        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_1), 0);
-        in2 = sock_recv_2_p9999->get_incoming();
-        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_3), 0);
-    }
-
-    {
-        sock_trans_1_p9999->send(Buffer::create_from_string(test_string_1));
-        sock_trans_1_p9999->send(Buffer::create_from_string(test_string_2));
-        sock_trans_1_p9999->send(Buffer::create_from_string(test_string_3));
-
-        tr1->serve();
-        net1->serve();
-        net2->serve();
-        tr2->serve();
-        ASSERT_TRUE(sock_recv_2_p9999->has_incoming());
-        auto in2 = sock_recv_2_p9999->get_incoming();
-        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_1), 0);
-
-        ASSERT_TRUE(sock_recv_2_p9999->has_incoming());
-        in2 = sock_recv_2_p9999->get_incoming();
-        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_2), 0);
-
-        ASSERT_TRUE(sock_recv_2_p9999->has_incoming());
-        in2 = sock_recv_2_p9999->get_incoming();
-        EXPECT_EQ(strcmp((const char*) in2->data->data(), test_string_3), 0);
-    }
-}
-
-TEST(ChannelTest, TransmitReceiveStable)
-{
-    TransmissionMedium::ptr medium = std::make_shared<TransmissionMedium>();
-    std::shared_ptr<SystemDriverDeterministic> sys = std::make_shared<SystemDriverDeterministic>();
-
-    PhysicalInterfaceOptions opts;
-
-    std::shared_ptr<VirtualPhysicalInterface> phys1 = VirtualPhysicalInterface::create(opts, sys, medium);
-    std::shared_ptr<VirtualPhysicalInterface> phys2 = VirtualPhysicalInterface::create(opts, sys, medium);
-
-    NetworkLayer::ptr net1 = std::make_shared<NetworkLayer>(sys, 123);
-    net1->add_physical(phys1);
-
-    NetworkLayer::ptr net2 = std::make_shared<NetworkLayer>(sys, 321);
-    net2->add_physical(phys2);
-
-
-    auto tr1 = std::make_shared<TransportLayer>(net1);
-    auto tr2 = std::make_shared<TransportLayer>(net2);
-
-    // Transmitters
-    auto sock1_p1 = std::make_shared<SocketStable>(tr1, 1, 2, 321);
-
-    // Receivers
-    auto sock2_p2 = std::make_shared<SocketStable>(tr2, 2, 1, 123);
-
-    {
-        ASSERT_TRUE(sock1_p1->send(Buffer::create_from_string(test_string_1)));
-
-        tr1->serve();
-        net1->serve();
-        net2->serve();
-        tr2->serve();
-
-        ASSERT_TRUE(sock1_p1->busy());
-
-        ASSERT_TRUE(sock2_p2->send(Buffer::create_from_string(test_string_2)));
-
-        for (int i = 0; i < 4; i++)
+        auto& c = sim.add_client(i);
+        for(int j = 1; j <= sockets_count; j++)
         {
-            tr1->serve();
-            net1->serve();
-            net2->serve();
-            tr2->serve();
+            c.add_acceptor(j);
+            uint64_t target_address = (i-1 + j) % clients_count + 1;
+            c.add_initial_socket(target_address, 100 + j, j);
         }
-
-        ASSERT_FALSE(sock1_p1->busy());
-
-        sys->increment_time(500ms);
-        // After this time ack from 1 to 2 should be sent automatically, without real message
-
-        tr1->serve();
-        net1->serve();
-        net2->serve();
-        tr2->serve();
-
-        ASSERT_FALSE(sock2_p2->busy());
-
-        ASSERT_TRUE(sock2_p2->has_incoming());
-        auto in2 = sock2_p2->get_incoming();
-        EXPECT_EQ(strcmp((const char*) (*in2)->data(), test_string_1), 0);
     }
+
+    std::srand(0);
+    int connections_count = 0;
+
+    for (int i = 0; i < cycles_count; i++)
+    {
+        sim.serve_all();
+        if (i % 10 == 0)
+        {
+            int client_addr = rand() % clients_count + 1;
+            // Get one random initial socket
+            int socket_port = 100 + rand() % sockets_count + 1;
+            Socket& s = *sim.clients.at(client_addr).initial_sockets.at(socket_port);
+            // If it is not already in connection process or connected, connect
+            if (s.state() == Socket::State::not_connected)
+            {
+                s.connect();
+                connections_count++;
+                continue;
+            }
+        }
+    }
+
+    int total_accepted_sockets = 0;
+    for (int i = 1; i <= clients_count; i++)
+    {
+        total_accepted_sockets += sim.clients.at(i).accepted_sockets.size();
+    }
+
+    EXPECT_EQ(connections_count, total_accepted_sockets);
 }
-*/

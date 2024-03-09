@@ -43,7 +43,7 @@ struct ConnectionId
     bool operator<(const ConnectionId& right) const;
 };
 
-struct TransportHeader
+struct TransportDescription
 {
     enum class Type
     {
@@ -83,8 +83,8 @@ public:
 
     ConnectionId incoming_connectiion_id();
 
-    virtual void receive(Buffer::ptr data, const TransportHeader& header) = 0;
-    virtual std::optional<std::pair<TransportHeader, SegmentBuffer>> pick_outgoing() = 0;
+    virtual void receive(Buffer::ptr data, const TransportDescription& header) = 0;
+    virtual std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_outgoing() = 0;
 
 protected:
     TransportLayer& m_transport_layer;
@@ -136,8 +136,11 @@ public:
 
     State state();
 
-    void receive(Buffer::ptr data, const TransportHeader& header) override;
-    std::optional<std::pair<TransportHeader, SegmentBuffer>> pick_outgoing() override;
+    uint16_t unconfirmed_to_remote();
+    uint16_t missed_from_remote();
+
+    void receive(Buffer::ptr data, const TransportDescription& header) override;
+    std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_outgoing() override;
 
 private:
     struct AckTask
@@ -151,7 +154,7 @@ private:
 
     struct SendTask
     {
-        TransportHeader header;
+        TransportDescription header;
         Buffer::ptr buf;
         int sent_count = 0;
         std::chrono::steady_clock::time_point created;
@@ -159,7 +162,8 @@ private:
     };
 
     void prepare_ack(uint16_t message_id);
-    void create_send_task(uint16_t ack_for_message_id, TransportHeader::Type type, Buffer::ptr buf);
+    void create_send_task(uint16_t ack_for_message_id, TransportDescription::Type type, Buffer::ptr buf);
+    std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_force_ack();
 
     Options m_options;
 
@@ -168,6 +172,8 @@ private:
     QueueLocking<Buffer::ptr> m_incoming;
     uint16_t m_last_received_message_id = 0;
     uint16_t m_last_outgoing_message_id = 0;
+    uint16_t m_unconfirmed_to_remote = 0;
+    uint16_t m_missed_from_remote = 0;
     State m_state = State::not_connected;
 };
 
@@ -179,15 +185,15 @@ public:
     Acceptor(TransportLayer& transport_layer, uint16_t listening_port, OnNewConnectionCallback on_new_connection);
     ~Acceptor();
 
-    void receive(Buffer::ptr data, const TransportHeader& header) override;
-    std::optional<std::pair<TransportHeader, SegmentBuffer>> pick_outgoing() override;
+    void receive(Buffer::ptr data, const TransportDescription& header) override;
+    std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_outgoing() override;
 
 private:
     OnNewConnectionCallback m_on_new_connection;
 
 };
 
-class TransportLayer
+class TransportLayer : public PtrAliases<TransportLayer>
 {
 public:
     TransportLayer(NetworkLayer::ptr network);
@@ -201,8 +207,8 @@ public:
 
     ISystemDriver::ptr system_driver();
 
-    static std::optional<std::pair<TransportHeader, Buffer::ptr>> decode(MemBlock mem);
-    static void encode(SegmentBuffer& seg_buf, const TransportHeader& header);
+    static std::optional<std::pair<TransportDescription, Buffer::ptr>> decode(MemBlock mem);
+    static void encode(SegmentBuffer& seg_buf, const TransportDescription& header);
 
 private:
     void serve_incoming();
@@ -220,81 +226,4 @@ private:
 
 };
 
-/*
-class SocketBase
-{
-public:
-    SocketBase(const ConnectionId& conn_id);
-
-    const ConnectionId& connection_id();
-
-protected:
-    ConnectionId m_connection_id;
-};
-
-class SocketReceiver : virtual public SocketBase, public PtrAliases<SocketReceiver>
-{
-public:
-    SocketReceiver(const ConnectionId& conn_id);
-    virtual ~SocketReceiver() = default;
-
-    const ConnectionId& connection_id();
-
-    virtual void receive(Buffer::ptr data, uint64_t src_addr, uint16_t package_id, uint8_t header_bits_0) = 0;
-};
-
-class SocketTransmitter : virtual public SocketBase, public PtrAliases<SocketTransmitter>
-{
-public:
-    /// @todo Rewrite this with queue
-
-    SocketTransmitter(const ConnectionId& conn_id, uint8_t hop_limit = 10);
-    virtual ~SocketTransmitter() = default;
-
-    uint8_t hop_limit() const;
-
-    virtual std::optional<std::pair<uint8_t, SegmentBuffer>> pick_outgoing() = 0;
-
-protected:
-    uint16_t m_remote_port;
-    uint16_t m_remote_addr;
-    uint8_t m_hop_limit;
-};
-
-
-class TransportLayer : public PtrAliases<TransportLayer>
-{
-public:
-    TransportLayer(NetworkLayer::ptr network);
-
-    void add_receiver(SocketReceiver& socket);
-    void add_transmitter(SocketTransmitter& socket);
-
-    void remove_receiver(SocketReceiver& socket);
-    void remove_transmitter(SocketTransmitter& socket);
-
-    void serve();
-
-    NetworkLayer& network();
-
-    static std::optional<uint16_t> decode_port(MemBlock& mem, uint8_t port_size_bits);
-
-private:
-    struct TransportHeader0
-    {
-        uint8_t header_byte_0 = 0;
-        uint16_t target_port = 0;
-    };
-
-    static std::optional<std::pair<TransportHeader0, Buffer::ptr>> decode_base_header(MemBlock mem);
-    static void encode_base_header(SegmentBuffer& seg_buf, const TransportHeader0& header);
-
-    void serve_incoming();
-    void serve_outgoing();
-
-    std::map<uint16_t, SocketReceiver*> m_receivers;
-    std::set<SocketTransmitter*> m_transmitters;
-    NetworkLayer::ptr m_network;
-};
-*/
 }
