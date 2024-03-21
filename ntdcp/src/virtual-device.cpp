@@ -102,7 +102,7 @@ void TransmissionMedium::send(Buffer::ptr data, std::shared_ptr<VirtualPhysicalI
     }
 }
 
-void TransmissionMedium::set_broken(bool broken)
+bool& TransmissionMedium::broken()
 {
-    m_broken = broken;
+    return m_broken;
 }

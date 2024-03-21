@@ -57,7 +57,7 @@ class TransmissionMedium : public PtrAliases<TransmissionMedium>
 public:
     void add_client(std::shared_ptr<VirtualPhysicalInterface> client);
     void send(Buffer::ptr data, std::shared_ptr<VirtualPhysicalInterface> sender);
-    void set_broken(bool broken);
+    bool& broken();
 
 private:
     std::vector<std::weak_ptr<VirtualPhysicalInterface>> m_clients;

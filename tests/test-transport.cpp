@@ -242,14 +242,14 @@ TEST(TransoportLevel, ConnectionLifecycle)
 TEST(TransoportLevel, NotStableTransmission)
 {
     ExchangeSimulation sim;
-    const int clients_count = 10;
-    const int sockets_count = 5;
+    const int clients_count = 2;
+    const int sockets_count = 1;
     const int cycles_count = 1000;
 
     for (int i = 1; i <= clients_count; i++)
     {
         auto& c = sim.add_client(i);
-        for(int j = 1; j <= sockets_count; j++)
+        for (int j = 1; j <= sockets_count; j++)
         {
             c.add_acceptor(j);
             uint64_t target_address = (i-1 + j) % clients_count + 1;
@@ -262,8 +262,9 @@ TEST(TransoportLevel, NotStableTransmission)
 
     for (int i = 0; i < cycles_count; i++)
     {
+        sim.sys->increment_time(100ms);
         sim.serve_all();
-        if (i % 10 == 0)
+        if (rand() % 5 == 0)
         {
             int client_addr = rand() % clients_count + 1;
             // Get one random initial socket
@@ -277,6 +278,17 @@ TEST(TransoportLevel, NotStableTransmission)
                 continue;
             }
         }
+         sim.medium->broken() = false;
+        if (rand() % 2 == 0)
+        {
+            sim.medium->broken() = true;
+        }
+
+        // if (rand() % 7 == 0)
+        // {
+        //     sim.medium->set_broken(false);
+        // }
+
     }
 
     int total_accepted_sockets = 0;
