@@ -13,12 +13,19 @@ using namespace std::literals::chrono_literals;
 class ExchangeSimulation
 {
 public:
+
+    ExchangeSimulation(const Socket::Options& opts = Socket::Options()) :
+        socket_opts(opts)
+    {
+    }
+
     struct Client
     {
-        Client(TransmissionMedium::ptr medium, ISystemDriver::ptr sys, uint64_t addr) :
+        Client(TransmissionMedium::ptr medium, SystemDriver::ptr sys, uint64_t addr, const Socket::Options& opts) :
             phys(VirtualPhysicalInterface::create(PhysicalInterfaceOptions(), sys, medium)),
             net(std::make_shared<NetworkLayer>(sys, addr)),
-            transport(std::make_shared<TransportLayer>(net))
+            transport(std::make_shared<TransportLayer>(net)),
+            socket_opts(opts)
         {
             net->add_physical(phys);
         }
@@ -31,14 +38,15 @@ public:
                 [this](std::shared_ptr<Socket> sock)
                 {
                     accepted_sockets[sock->local_port()] = sock;
-                }
+                },
+                socket_opts
             ));
             transport->add_acceptor(emp.first->second);
         }
 
         void add_initial_socket(uint64_t remote_addr, uint16_t local_port, uint16_t remote_port)
         {
-            initial_sockets.emplace(local_port, std::make_shared<Socket>(*transport, remote_addr, local_port, remote_port));
+            initial_sockets.emplace(local_port, std::make_shared<Socket>(*transport, remote_addr, local_port, remote_port, socket_opts));
         }
 
         void serve()
@@ -54,11 +62,12 @@ public:
         std::map<uint16_t, std::shared_ptr<Socket>> accepted_sockets;
         std::map<uint16_t, std::shared_ptr<Socket>> initial_sockets;
         std::map<uint16_t, Acceptor> acceptors;
+        Socket::Options socket_opts;
     };
 
     Client& add_client(uint64_t addr)
     {
-        return clients.emplace(addr, Client(medium, sys, addr)).first->second;
+        return clients.emplace(addr, Client(medium, sys, addr, socket_opts)).first->second;
     }
 
     void serve_all()
@@ -69,9 +78,35 @@ public:
         }
     }
 
+    int get_accepted_sockets_count()
+    {
+        int total_accepted_sockets = 0;
+        for (auto it = clients.begin(); it != clients.end(); ++it)
+        {
+            total_accepted_sockets += it->second.accepted_sockets.size();
+        }
+        return total_accepted_sockets;
+    }
+
+    int get_timed_out_initial_sockets_count()
+    {
+        int timed_out_sockets = 0;
+        for (auto it = clients.begin(); it != clients.end(); ++it)
+        {
+            const auto& initial_socks = it->second.initial_sockets;
+            for (auto jt = initial_socks.begin(); jt != initial_socks.end(); ++jt)
+            {
+                if (jt->second->state() == ntdcp::Socket::State::connection_timeout)
+                    timed_out_sockets++;
+            }
+        }
+        return timed_out_sockets;
+    }
+
     TransmissionMedium::ptr medium{std::make_shared<TransmissionMedium>()};
     std::shared_ptr<SystemDriverDeterministic> sys{std::make_shared<SystemDriverDeterministic>()};
     std::map<uint64_t, Client> clients;
+    Socket::Options socket_opts;
 };
 
 TEST(TransoportLevel, ConnectionLifecycle)
@@ -241,10 +276,15 @@ TEST(TransoportLevel, ConnectionLifecycle)
 
 TEST(TransoportLevel, NotStableTransmission)
 {
-    ExchangeSimulation sim;
-    const int clients_count = 2;
-    const int sockets_count = 1;
+    Socket::Options socket_options;
+    socket_options.timeout = 1h;
+
+    ExchangeSimulation sim(socket_options);
+    const int clients_count = 100;
+    const int sockets_count = 20;
     const int cycles_count = 1000;
+
+    auto begin_time_point = sim.sys->now();
 
     for (int i = 1; i <= clients_count; i++)
     {
@@ -258,13 +298,15 @@ TEST(TransoportLevel, NotStableTransmission)
     }
 
     std::srand(0);
-    int connections_count = 0;
+    int connections_requested = 0;
 
     for (int i = 0; i < cycles_count; i++)
     {
+        // std::cout << "connections = " << connections_requested << "; accepted sockets: " << sim.get_accepted_sockets_count() << "; timeouted = " << sim.get_timed_out_initial_sockets_count() << std::endl;
+
         sim.sys->increment_time(100ms);
         sim.serve_all();
-        if (rand() % 5 == 0)
+        if (rand() % 3 == 0)
         {
             int client_addr = rand() % clients_count + 1;
             // Get one random initial socket
@@ -274,28 +316,31 @@ TEST(TransoportLevel, NotStableTransmission)
             if (s.state() == Socket::State::not_connected)
             {
                 s.connect();
-                connections_count++;
+                connections_requested++;
                 continue;
             }
         }
-         sim.medium->broken() = false;
+
+        sim.medium->broken() = false;
         if (rand() % 2 == 0)
         {
             sim.medium->broken() = true;
         }
-
-        // if (rand() % 7 == 0)
-        // {
-        //     sim.medium->set_broken(false);
-        // }
-
     }
 
-    int total_accepted_sockets = 0;
-    for (int i = 1; i <= clients_count; i++)
+    sim.medium->broken() = false;
+
+    // To do a final successful exchange
+    for (int i = 0; i < 4; i++)
     {
-        total_accepted_sockets += sim.clients.at(i).accepted_sockets.size();
+        sim.sys->increment_time(socket_options.restransmission_time + 1ms);
+        sim.serve_all();
+
+        // std::cout << "after connections = " << connections_requested << "; accepted sockets: " << sim.get_accepted_sockets_count() << "; timeouted = " << sim.get_timed_out_initial_sockets_count() << std::endl;
     }
 
-    EXPECT_EQ(connections_count, total_accepted_sockets);
+    // std::cout << "total emulation time: " << std::chrono::duration_cast<std::chrono::seconds>(sim.sys->now() - begin_time_point).count() << "s" << std::endl;
+
+    EXPECT_EQ(connections_requested, sim.get_accepted_sockets_count());
 }
+

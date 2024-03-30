@@ -4,7 +4,7 @@ using namespace ntdcp;
 
 
 
-NetworkLayer::NetworkLayer(ISystemDriver::ptr sys, uint64_t addr) :
+NetworkLayer::NetworkLayer(SystemDriver::ptr sys, uint64_t addr) :
     m_sys(sys), m_addr(addr)
 {
 
@@ -62,7 +62,7 @@ void NetworkLayer::serve()
     serve_outgoing();
 }
 
-ISystemDriver::ptr NetworkLayer::system_driver()
+SystemDriver::ptr NetworkLayer::system_driver()
 {
     return m_sys;
 }

@@ -21,6 +21,7 @@ add_library(${PROJECT_NAME}
     ntdcp/transport.hpp
     src/transport.cpp
     ntdcp/synchronization.hpp
+    src/system-driver.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)

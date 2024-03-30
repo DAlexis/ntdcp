@@ -14,7 +14,7 @@ private:
     std::mutex m_mutex;
 };
 
-class SystemDriverDeterministic : public ISystemDriver
+class SystemDriverDeterministic : public SystemDriver
 {
 public:
     uint32_t random() override;
@@ -33,7 +33,7 @@ class TransmissionMedium;
 class VirtualPhysicalInterface : public IPhysicalInterface, public std::enable_shared_from_this<VirtualPhysicalInterface>
 {
 public:
-    static std::shared_ptr<VirtualPhysicalInterface> create(PhysicalInterfaceOptions opts, ISystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium);
+    static std::shared_ptr<VirtualPhysicalInterface> create(PhysicalInterfaceOptions opts, SystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium);
 
     SerialReadAccessor& incoming() override;
     void send(Buffer::ptr data) override;
@@ -43,10 +43,10 @@ public:
     void receive_from_medium(Buffer::ptr data);
 
 private:
-    VirtualPhysicalInterface(PhysicalInterfaceOptions opts, ISystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium);
+    VirtualPhysicalInterface(PhysicalInterfaceOptions opts, SystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium);
 
     PhysicalInterfaceOptions m_opts;
-    ISystemDriver::ptr m_sys;
+    SystemDriver::ptr m_sys;
     std::chrono::steady_clock::time_point m_last_tx;
     std::shared_ptr<TransmissionMedium> m_medium;
     RingBuffer m_data;

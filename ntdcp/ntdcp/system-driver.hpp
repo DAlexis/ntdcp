@@ -15,11 +15,12 @@ public:
     virtual void unlock() = 0;
 };
 
-class ISystemDriver : public PtrAliases<ISystemDriver>
+class SystemDriver : public PtrAliases<SystemDriver>
 {
 public:
-    virtual ~ISystemDriver() = default;
+    virtual ~SystemDriver() = default;
     virtual uint32_t random() = 0;
+    virtual uint32_t random_nonzero();
     virtual std::chrono::steady_clock::time_point now() const = 0;
     virtual std::unique_ptr<IMutex> create_mutex() = 0;
 };

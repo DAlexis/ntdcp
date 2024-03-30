@@ -44,8 +44,8 @@ public:
         uint16_t package_id;
         Buffer::ptr data;
     };
-
-    NetworkLayer(ISystemDriver::ptr sys, uint64_t addr);
+    
+    NetworkLayer(SystemDriver::ptr sys, uint64_t addr);
     void add_physical(IPhysicalInterface::ptr phys);
 
     void send(Buffer::ptr data, uint64_t destination_addr, uint8_t hop_limit = 10);
@@ -53,8 +53,8 @@ public:
     std::optional<Package> incoming();
 
     void serve();
-
-    ISystemDriver::ptr system_driver();
+    
+    SystemDriver::ptr system_driver();
 
 private:
     struct PackageHeader
@@ -88,7 +88,7 @@ private:
     static std::optional<uint64_t> read_addr_from_mem(MemBlock& data, uint8_t address_size_bits);
 
     ChannelLayer m_channel;
-    ISystemDriver::ptr m_sys;
+    SystemDriver::ptr m_sys;
     uint64_t m_addr;
 
     std::queue<Package> m_incoming;

@@ -21,8 +21,8 @@ bool ConnectionId::operator<(const ConnectionId& right) const
 // ---------------------------
 // SocketBase
 
-SocketBase::SocketBase(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port) :
-    m_transport_layer(transport_layer), m_remote_address(remote_address), m_remote_port(remote_port), m_local_port(local_port)
+SocketBase::SocketBase(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port, const Options& opts) :
+    m_transport_layer(transport_layer), m_remote_address(remote_address), m_remote_port(remote_port), m_local_port(local_port), m_options(opts)
 {
 }
 
@@ -54,8 +54,8 @@ SocketBase::~SocketBase()
 // ---------------------------
 // Acceptor
 
-Acceptor::Acceptor(TransportLayer& transport_layer, uint16_t listening_port, OnNewConnectionCallback on_new_connection) :
-    SocketBase(transport_layer, 0, listening_port, 0), m_on_new_connection(on_new_connection)
+Acceptor::Acceptor(TransportLayer& transport_layer, uint16_t listening_port, OnNewConnectionCallback on_new_connection, const Options& opts) :
+    SocketBase(transport_layer, 0, listening_port, 0, opts), m_on_new_connection(on_new_connection)
 {
     m_transport_layer.add_acceptor(*this);
 }
@@ -69,12 +69,27 @@ void Acceptor::receive(Buffer::ptr data, const TransportDescription& header)
 {
     if (header.type == TransportDescription::Type::connection_request)
     {
+        auto already_existed = m_already_created_sockets.get_update(header.message_id);
+        if (already_existed)
+        {
+            auto w_sock = **already_existed;
+            if (auto s = w_sock.lock())
+            {
+                // Socket already exists, redirect to it
+                s->send_connection_submit(header.message_id);
+                return;
+            } else {
+                m_already_created_sockets.erase(header.message_id);
+            }
+        }
+
         uint16_t new_port;
 
         while ((new_port = m_transport_layer.system_driver()->random() & 0xFFFF) == 0);
 
-        auto new_sock = std::make_shared<Socket>(m_transport_layer, header.source_addr, new_port, header.source_port);
+        auto new_sock = std::make_shared<Socket>(m_transport_layer, header.source_addr, new_port, header.source_port, m_options);
         new_sock->send_connection_submit(header.message_id);
+        m_already_created_sockets.put_update(header.message_id, new_sock);
         m_on_new_connection(new_sock);
         return;
     }
@@ -88,8 +103,8 @@ std::optional<std::pair<TransportDescription, SegmentBuffer>> Acceptor::pick_out
 // ---------------------------
 // Socket
 
-Socket::Socket(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port) :
-    SocketBase(transport_layer, remote_address, local_port, remote_port), m_incoming(*transport_layer.system_driver())
+Socket::Socket(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port, const Options& opts) :
+    SocketBase(transport_layer, remote_address, local_port, remote_port, opts), m_incoming(*transport_layer.system_driver())
 {
     m_transport_layer.add_socket(*this);
 }
@@ -118,8 +133,14 @@ bool Socket::connect()
     return true;
 }
 
+bool Socket::ready_to_send()
+{
+    return m_state == State::connected && !m_send_task.has_value();
+}
+
 void Socket::send_connection_submit(uint16_t message_id)
 {
+    // TODO if call after already established connection go to broken state
     prepare_ack(message_id);
     // m_ack_task->force_send_immediately = true;
 
@@ -180,12 +201,24 @@ uint16_t Socket::missed_from_remote()
 
 void Socket::receive(Buffer::ptr data, const TransportDescription& header)
 {
+    if (m_state == State::connection_timeout)
+    {
+        // We should not do anything after a moment we detected a timeout
+        return;
+    }
+
     // Check ack
-    if (m_send_task && header.ack_for_message_id == m_send_task->header.message_id)
+    if (m_send_task && header.ack_for_message_id == m_send_task->description.message_id)
     {
         // We have acknoledgement that our last transmission is OK, so remove it from outgoing
         m_send_task.reset();
         m_unconfirmed_to_remote--;
+    }
+
+    if (header.message_id <= m_last_received_message_id)
+    {
+        prepare_ack(header.message_id);
+        return; // We already got this segment
     }
 
     if (m_state == Socket::State::closed)
@@ -201,7 +234,7 @@ void Socket::receive(Buffer::ptr data, const TransportDescription& header)
         }
 
         // And this is not a close submit, lets send close submit that should never have answer
-        create_send_task(m_send_task->header.message_id, TransportDescription::Type::connection_close_submit, nullptr);
+        create_send_task(m_send_task->description.message_id, TransportDescription::Type::connection_close_submit, nullptr);
         return;
     }
 
@@ -226,8 +259,6 @@ void Socket::receive(Buffer::ptr data, const TransportDescription& header)
         return;
     }
 
-    if (header.message_id <= m_last_received_message_id)
-        return; // We already got this segment
 
     if (data->size() != 0)
     {
@@ -253,15 +284,16 @@ void Socket::create_send_task(uint16_t ack_for_message_id, TransportDescription:
 {
     m_send_task = SendTask();
     m_send_task->created = m_transport_layer.system_driver()->now();
-    m_send_task->header.message_id = type == TransportDescription::Type::connection_request ? 0 : ++m_last_outgoing_message_id;
-    m_send_task->header.ack_for_message_id = ack_for_message_id;
-    m_send_task->header.has_ack = (ack_for_message_id != 0);
-    m_send_task->header.repeat = 1;
-    m_send_task->header.type = type;
-    m_send_task->header.destination_addr = m_remote_address;
-    m_send_task->header.source_addr = 0;
-    m_send_task->header.source_port = m_local_port;
-    m_send_task->header.destination_port = m_remote_port;
+    m_send_task->description.message_id = type == TransportDescription::Type::connection_request ? m_transport_layer.system_driver()->random_nonzero() : ++m_last_outgoing_message_id;
+    m_send_task->description.ack_for_message_id = ack_for_message_id;
+    m_send_task->description.has_ack = (ack_for_message_id != 0);
+    m_send_task->description.repeat = 1;
+    m_send_task->description.type = type;
+    m_send_task->description.destination_addr = m_remote_address;
+    m_send_task->description.source_addr = 0;
+    m_send_task->description.source_port = m_local_port;
+    m_send_task->description.destination_port = m_remote_port;
+    m_send_task->timeout = m_options.timeout;
     m_send_task->buf = buf;
 
     if (type != TransportDescription::Type::connection_close_submit)
@@ -286,10 +318,32 @@ std::optional<std::pair<TransportDescription, SegmentBuffer>> Socket::pick_force
     return std::make_pair(hdr, SegmentBuffer());
 }
 
+void Socket::drop_if_timeout(std::chrono::steady_clock::time_point now)
+{
+    if (!m_send_task)
+        return;
+
+    if (now - m_send_task->created > m_send_task->timeout)
+    {
+        if (m_send_task->description.type == TransportDescription::Type::connection_request)
+        {
+            m_state = State::connection_timeout;
+        }
+
+        m_send_task.reset();
+    }
+}
+
 std::optional<std::pair<TransportDescription, SegmentBuffer>> Socket::pick_outgoing()
 {
-    // drop_if_timeout();
+    if (m_state == State::connection_timeout)
+    {
+        // We should not do anything after a moment we detected a timeout
+        return std::nullopt;
+    }
+
     auto now = m_transport_layer.system_driver()->now();
+    drop_if_timeout(now);
 
     if (!m_send_task)
     {
@@ -316,11 +370,11 @@ std::optional<std::pair<TransportDescription, SegmentBuffer>> Socket::pick_outgo
 
     if (m_ack_task)
     {
-        m_send_task->header.ack_for_message_id = m_ack_task->message_id;
+        m_send_task->description.ack_for_message_id = m_ack_task->message_id;
         m_ack_task->was_sent_at_least_once = true;
     }
 
-    return std::make_pair(m_send_task->header, sg);
+    return std::make_pair(m_send_task->description, sg);
 }
 
 
@@ -359,7 +413,7 @@ void TransportLayer::serve()
     serve_outgoing();
 }
 
-ISystemDriver::ptr TransportLayer::system_driver()
+SystemDriver::ptr TransportLayer::system_driver()
 {
     return m_network->system_driver();
 }
@@ -457,7 +511,9 @@ Socket* TransportLayer::find_socket_for_submit(uint64_t source_addr, uint16_t ds
 {
     for (auto s : m_sockets)
     {
-        if (s->state() != Socket::State::waiting_for_submit)
+        // Connection submit may be directed to socket waiting for submit or socket that has already received a copy
+        // of connection submit, sent ack, but ack was failed, so we should repeat ack
+        if (s->state() != Socket::State::waiting_for_submit && s->state() != Socket::State::connected)
             continue;
 
         if (s->remote_address() == source_addr && s->local_port() == dst_port)

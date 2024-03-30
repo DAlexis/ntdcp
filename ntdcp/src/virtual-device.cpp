@@ -34,12 +34,12 @@ void SystemDriverDeterministic::increment_time(std::chrono::milliseconds dt)
     m_current_time += dt;
 }
 
-VirtualPhysicalInterface::VirtualPhysicalInterface(PhysicalInterfaceOptions opts, ISystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium) :
+VirtualPhysicalInterface::VirtualPhysicalInterface(PhysicalInterfaceOptions opts, SystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium) :
     m_opts(opts), m_sys(sys), m_medium(medium), m_data(opts.ring_buffer_size)
 {
 }
 
-std::shared_ptr<VirtualPhysicalInterface> VirtualPhysicalInterface::create(PhysicalInterfaceOptions opts, ISystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium)
+std::shared_ptr<VirtualPhysicalInterface> VirtualPhysicalInterface::create(PhysicalInterfaceOptions opts, SystemDriver::ptr sys, std::shared_ptr<TransmissionMedium> medium)
 {
     auto result = std::shared_ptr<VirtualPhysicalInterface>(new VirtualPhysicalInterface(opts, sys, medium));
     medium->add_client(result);

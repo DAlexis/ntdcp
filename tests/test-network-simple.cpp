@@ -41,7 +41,7 @@ protected:
 
     // void TearDown() override {}
     TransmissionMedium::ptr medium;
-    ISystemDriver::ptr sys;
+    SystemDriver::ptr sys;
     std::vector<std::shared_ptr<VirtualPhysicalInterface>> physicals;
     std::map<uint64_t, std::shared_ptr<NetworkLayer>> networks;
 };

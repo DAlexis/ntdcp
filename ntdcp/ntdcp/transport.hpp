@@ -74,30 +74,6 @@ struct TransportDescription
 class SocketBase
 {
 public:
-    SocketBase(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port); // mb replace connecion id with addr, port, port?
-    virtual ~SocketBase();
-
-    uint64_t remote_address();
-    uint16_t remote_port();
-    uint16_t local_port();
-
-    ConnectionId incoming_connectiion_id();
-
-    virtual void receive(Buffer::ptr data, const TransportDescription& header) = 0;
-    virtual std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_outgoing() = 0;
-
-protected:
-    TransportLayer& m_transport_layer;
-    uint64_t m_remote_address;
-    uint16_t m_remote_port;
-    uint16_t m_local_port;
-};
-
-
-
-class Socket : public SocketBase
-{
-public:
     struct Options
     {
         enum class Policy
@@ -114,19 +90,47 @@ public:
         std::chrono::milliseconds force_ack_after{200};
     };
 
+    SocketBase(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port, const Options& opts); // mb replace connecion id with addr, port, port?
+    virtual ~SocketBase();
+
+    uint64_t remote_address();
+    uint16_t remote_port();
+    uint16_t local_port();
+
+    ConnectionId incoming_connectiion_id();
+
+    virtual void receive(Buffer::ptr data, const TransportDescription& header) = 0;
+    virtual std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_outgoing() = 0;
+
+protected:
+    TransportLayer& m_transport_layer;
+    uint64_t m_remote_address;
+    uint16_t m_remote_port;
+    uint16_t m_local_port;
+
+    Options m_options;
+};
+
+
+
+class Socket : public SocketBase
+{
+public:
     enum class State
     {
         not_connected,
         waiting_for_submit,
         connected,
+        connection_timeout,
         closed
     };
 
-    Socket(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port);
+    Socket(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port, const Options& opts = Options());
     ~Socket();
 
     bool busy();
     bool connect();
+    bool ready_to_send();
     void send_connection_submit(uint16_t message_id);
     bool send(Buffer::ptr data);
     bool has_data();
@@ -154,18 +158,18 @@ private:
 
     struct SendTask
     {
-        TransportDescription header;
+        TransportDescription description;
         Buffer::ptr buf;
         int sent_count = 0;
         std::chrono::steady_clock::time_point created;
         std::chrono::steady_clock::time_point last_pick;
+        std::chrono::milliseconds timeout; // TODO Add timeout support
     };
 
     void prepare_ack(uint16_t message_id);
     void create_send_task(uint16_t ack_for_message_id, TransportDescription::Type type, Buffer::ptr buf);
     std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_force_ack();
-
-    Options m_options;
+    void drop_if_timeout(std::chrono::steady_clock::time_point now);
 
     std::optional<AckTask> m_ack_task;
     std::optional<SendTask> m_send_task;
@@ -182,7 +186,7 @@ class Acceptor : public SocketBase
 public:
     using OnNewConnectionCallback = std::function<void(std::shared_ptr<Socket>)>;
 
-    Acceptor(TransportLayer& transport_layer, uint16_t listening_port, OnNewConnectionCallback on_new_connection);
+    Acceptor(TransportLayer& transport_layer, uint16_t listening_port, OnNewConnectionCallback on_new_connection, const Options& opts = Options());
     ~Acceptor();
 
     void receive(Buffer::ptr data, const TransportDescription& header) override;
@@ -190,7 +194,7 @@ public:
 
 private:
     OnNewConnectionCallback m_on_new_connection;
-
+    CachingMap<uint32_t, std::weak_ptr<Socket>> m_already_created_sockets{10};
 };
 
 class TransportLayer : public PtrAliases<TransportLayer>
@@ -205,7 +209,7 @@ public:
 
     void serve();
 
-    ISystemDriver::ptr system_driver();
+    SystemDriver::ptr system_driver();
 
     static std::optional<std::pair<TransportDescription, Buffer::ptr>> decode(MemBlock mem);
     static void encode(SegmentBuffer& seg_buf, const TransportDescription& header);
@@ -222,8 +226,6 @@ private:
     NetworkLayer::ptr m_network;
     std::set<Socket*> m_sockets; // temporary solution
     std::map<uint16_t, Acceptor*> m_acceptors;
-    // std::map<ConnectionId, SocketBase*> m_sockets;
-
 };
 
 }

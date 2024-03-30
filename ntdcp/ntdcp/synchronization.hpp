@@ -12,7 +12,7 @@ template<typename T>
 class QueueLocking
 {
 public:
-    QueueLocking(ISystemDriver& system_driver, size_t max_size = 10) :
+    QueueLocking(SystemDriver& system_driver, size_t max_size = 10) :
         m_max_size(max_size)
     {
         m_mutex = system_driver.create_mutex();
