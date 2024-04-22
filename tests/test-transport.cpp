@@ -14,14 +14,14 @@ class ExchangeSimulation
 {
 public:
 
-    ExchangeSimulation(const Socket::Options& opts = Socket::Options()) :
+    ExchangeSimulation(const RetransmissionOptions& opts = RetransmissionOptions()) :
         socket_opts(opts)
     {
     }
 
     struct Client
     {
-        Client(TransmissionMedium::ptr medium, SystemDriver::ptr sys, uint64_t addr, const Socket::Options& opts) :
+        Client(TransmissionMedium::ptr medium, SystemDriver::ptr sys, uint64_t addr, const RetransmissionOptions& opts) :
             phys(VirtualPhysicalInterface::create(PhysicalInterfaceOptions(), sys, medium)),
             net(std::make_shared<NetworkLayer>(sys, addr)),
             transport(std::make_shared<TransportLayer>(net)),
@@ -62,7 +62,7 @@ public:
         std::map<uint16_t, std::shared_ptr<Socket>> accepted_sockets;
         std::map<uint16_t, std::shared_ptr<Socket>> initial_sockets;
         std::map<uint16_t, Acceptor> acceptors;
-        Socket::Options socket_opts;
+        RetransmissionOptions socket_opts;
     };
 
     Client& add_client(uint64_t addr)
@@ -106,7 +106,7 @@ public:
     TransmissionMedium::ptr medium{std::make_shared<TransmissionMedium>()};
     std::shared_ptr<SystemDriverDeterministic> sys{std::make_shared<SystemDriverDeterministic>()};
     std::map<uint64_t, Client> clients;
-    Socket::Options socket_opts;
+    RetransmissionOptions socket_opts;
 };
 
 TEST(TransoportLevel, ConnectionLifecycle)
@@ -160,7 +160,7 @@ TEST(TransoportLevel, ConnectionLifecycle)
     EXPECT_EQ(initial_socket.unconfirmed_to_remote(), 0);
     EXPECT_EQ(initial_socket.missed_from_remote(), 0);
 
-    Socket::Options default_socket_options;
+    RetransmissionOptions default_socket_options;
     sys->increment_time(default_socket_options.force_ack_after + 1ms);
 
     tr1->serve(); // 123:300 force ack --> 321:rnd
@@ -276,7 +276,7 @@ TEST(TransoportLevel, ConnectionLifecycle)
 
 TEST(TransoportLevel, NotStableTransmission)
 {
-    Socket::Options socket_options;
+    RetransmissionOptions socket_options;
     socket_options.timeout = 1h;
 
     ExchangeSimulation sim(socket_options);

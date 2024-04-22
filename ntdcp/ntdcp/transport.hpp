@@ -6,8 +6,7 @@
 #include <functional>
 #include <set>
 
-namespace ntdcp
-{
+namespace ntdcp {
 
 /**
  * Zero header byte meaning
@@ -28,10 +27,7 @@ namespace ntdcp
  *   - 0b00: RESERVED
  */
 
-
 class TransportLayer;
-
-
 
 struct ConnectionId
 {
@@ -45,8 +41,7 @@ struct ConnectionId
 
 struct TransportDescription
 {
-    enum class Type
-    {
+    enum class Type {
         broadcast,
         connection_request,
         connection_submit,
@@ -71,53 +66,53 @@ struct TransportDescription
     bool has_ack = false;
 };
 
-class SocketBase
+class Receiver
 {
 public:
-    struct Options
-    {
-        enum class Policy
-        {
-            drop_when_timeout,
-            break_when_timeout
-        };
+    Receiver(uint16_t local_port);
 
-        Policy policy = Policy::break_when_timeout;
+    virtual void receive(Buffer::ptr data, const TransportDescription& header) = 0;
 
-        std::chrono::milliseconds timeout{10000};
-        std::chrono::milliseconds restransmission_time{1000};
+    uint16_t local_port();
 
-        std::chrono::milliseconds force_ack_after{200};
-    };
+protected:
+    uint16_t m_local_port;
+};
 
-    SocketBase(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port, const Options& opts); // mb replace connecion id with addr, port, port?
-    virtual ~SocketBase();
+class Transmitter
+{
+public:
+    Transmitter(uint64_t remote_address, uint16_t remote_port);
 
     uint64_t remote_address();
     uint16_t remote_port();
-    uint16_t local_port();
 
-    ConnectionId incoming_connectiion_id();
-
-    virtual void receive(Buffer::ptr data, const TransportDescription& header) = 0;
     virtual std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_outgoing() = 0;
 
 protected:
-    TransportLayer& m_transport_layer;
     uint64_t m_remote_address;
     uint16_t m_remote_port;
-    uint16_t m_local_port;
-
-    Options m_options;
 };
 
+struct RetransmissionOptions
+{
+    enum class Policy {
+        drop_when_timeout,
+        break_when_timeout
+    };
 
+    Policy policy = Policy::break_when_timeout;
 
-class Socket : public SocketBase
+    std::chrono::milliseconds timeout{10000};
+    std::chrono::milliseconds restransmission_time{1000};
+
+    std::chrono::milliseconds force_ack_after{200};
+};
+
+class Socket : public Receiver, public Transmitter
 {
 public:
-    enum class State
-    {
+    enum class State {
         not_connected,
         waiting_for_submit,
         connected,
@@ -125,7 +120,8 @@ public:
         closed
     };
 
-    Socket(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port, const Options& opts = Options());
+    Socket(TransportLayer& transport_layer, uint64_t remote_address, uint16_t local_port, uint16_t remote_port,
+           const RetransmissionOptions& opts = RetransmissionOptions());
     ~Socket();
 
     bool busy();
@@ -155,7 +151,6 @@ private:
         bool force_send_immediately = false;
     };
 
-
     struct SendTask
     {
         TransportDescription description;
@@ -171,6 +166,9 @@ private:
     std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_force_ack();
     void drop_if_timeout(std::chrono::steady_clock::time_point now);
 
+    TransportLayer& m_transport_layer;
+    RetransmissionOptions m_options;
+
     std::optional<AckTask> m_ack_task;
     std::optional<SendTask> m_send_task;
     QueueLocking<Buffer::ptr> m_incoming;
@@ -181,18 +179,38 @@ private:
     State m_state = State::not_connected;
 };
 
-class Acceptor : public SocketBase
+class BroadcastReceiver : public Receiver
+{
+public:
+    struct Sender
+    {
+        uint32_t address;
+    };
+
+    BroadcastReceiver(TransportLayer& transport_layer, uint16_t local_port);
+    ~BroadcastReceiver();
+
+    void receive(Buffer::ptr data, const TransportDescription& header) override;
+
+private:
+    TransportLayer& m_transport_layer;
+};
+
+class Acceptor : public Receiver
 {
 public:
     using OnNewConnectionCallback = std::function<void(std::shared_ptr<Socket>)>;
 
-    Acceptor(TransportLayer& transport_layer, uint16_t listening_port, OnNewConnectionCallback on_new_connection, const Options& opts = Options());
+    Acceptor(TransportLayer& transport_layer, uint16_t listening_port, OnNewConnectionCallback on_new_connection,
+             const RetransmissionOptions& opts = RetransmissionOptions());
     ~Acceptor();
 
     void receive(Buffer::ptr data, const TransportDescription& header) override;
-    std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_outgoing() override;
 
 private:
+    TransportLayer& m_transport_layer;
+    RetransmissionOptions m_options;
+
     OnNewConnectionCallback m_on_new_connection;
     CachingMap<uint32_t, std::weak_ptr<Socket>> m_already_created_sockets{10};
 };
@@ -206,6 +224,9 @@ public:
 
     void add_acceptor(Acceptor& acceptor);
     void remove_acceptor(Acceptor& acceptor);
+
+    void add_broadcast_receiver(BroadcastReceiver& receiver);
+    void remove_broadcast_receiver(BroadcastReceiver& receiver);
 
     void serve();
 
@@ -226,6 +247,7 @@ private:
     NetworkLayer::ptr m_network;
     std::set<Socket*> m_sockets; // temporary solution
     std::map<uint16_t, Acceptor*> m_acceptors;
+    std::map<uint16_t, BroadcastReceiver*> m_broadcast_receivers;
 };
 
-}
+} // namespace ntdcp
