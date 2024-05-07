@@ -173,7 +173,10 @@ bool Socket::has_data()
 
 std::optional<Buffer::ptr> Socket::get_received()
 {
-    return m_incoming.pop();
+    if (has_data())
+        return m_incoming.pop();
+
+    return std::nullopt;
 }
 
 void Socket::close()
@@ -387,7 +390,8 @@ std::optional<std::pair<TransportDescription, SegmentBuffer>> Socket::pick_outgo
 
 BroadcastReceiver::BroadcastReceiver(TransportLayer& transport_layer, uint16_t local_port) :
     Receiver(local_port),
-    m_transport_layer(transport_layer)
+    m_transport_layer(transport_layer),
+    m_incoming(*transport_layer.system_driver())
 {
     m_transport_layer.add_broadcast_receiver(*this);
 }
@@ -397,7 +401,33 @@ BroadcastReceiver::~BroadcastReceiver()
     m_transport_layer.remove_broadcast_receiver(*this);
 }
 
-void BroadcastReceiver::receive(Buffer::ptr data, const TransportDescription& header) {}
+void BroadcastReceiver::receive(Buffer::ptr data, const TransportDescription& header)
+{
+    Sender s;
+    s.address = header.source_addr;
+    m_incoming.push(std::make_pair(s, data));
+}
+
+bool BroadcastReceiver::has_data()
+{
+    return !m_incoming.empty();
+}
+
+std::optional<std::pair<BroadcastReceiver::Sender, Buffer::ptr>> BroadcastReceiver::get_received()
+{
+    if (has_data())
+        return m_incoming.pop();
+
+    return std::nullopt;
+}
+
+
+// ---------------------------
+// BroadcastTransmitter
+
+std::optional<std::pair<TransportDescription, SegmentBuffer>> BroadcastTransmitter::pick_outgoing()
+{
+}
 
 // ---------------------------
 // TransportLayer
@@ -475,6 +505,8 @@ void TransportLayer::serve_incoming()
         case TransportDescription::Type::connection_close_submit:
             r = find_socket_for_close_submit(header.source_addr, header.source_port, header.destination_port);
             break;
+        case TransportDescription::Type::broadcast:
+            r = find_broadcast(header.destination_port);
         default:
             r = find_socket_for_data(header.source_addr, header.source_port, header.destination_port);
         }
@@ -503,7 +535,7 @@ void TransportLayer::serve_outgoing()
     }
 }
 
-Acceptor* TransportLayer::find_acceptor(uint16_t port)
+Receiver* TransportLayer::find_acceptor(uint16_t port)
 {
     auto it = m_acceptors.find(port);
     if (it != m_acceptors.end())
@@ -512,7 +544,7 @@ Acceptor* TransportLayer::find_acceptor(uint16_t port)
         return nullptr;
 }
 
-Socket* TransportLayer::find_socket_for_data(uint64_t source_addr, uint16_t source_port, uint16_t dst_port)
+Receiver* TransportLayer::find_socket_for_data(uint64_t source_addr, uint16_t source_port, uint16_t dst_port)
 {
     for (auto s: m_sockets)
     {
@@ -524,7 +556,7 @@ Socket* TransportLayer::find_socket_for_data(uint64_t source_addr, uint16_t sour
     return nullptr;
 }
 
-Socket* TransportLayer::find_socket_for_close_submit(uint64_t source_addr, uint16_t source_port, uint16_t dst_port)
+Receiver* TransportLayer::find_socket_for_close_submit(uint64_t source_addr, uint16_t source_port, uint16_t dst_port)
 {
     for (auto s: m_sockets)
     {
@@ -536,7 +568,7 @@ Socket* TransportLayer::find_socket_for_close_submit(uint64_t source_addr, uint1
     return nullptr;
 }
 
-Socket* TransportLayer::find_socket_for_submit(uint64_t source_addr, uint16_t dst_port)
+Receiver* TransportLayer::find_socket_for_submit(uint64_t source_addr, uint16_t dst_port)
 {
     for (auto s: m_sockets)
     {
@@ -549,6 +581,15 @@ Socket* TransportLayer::find_socket_for_submit(uint64_t source_addr, uint16_t ds
             return s;
     }
     return nullptr;
+}
+
+Receiver* TransportLayer::find_broadcast(uint16_t port)
+{
+    auto it = m_broadcast_receivers.find(port);
+    if (it == m_broadcast_receivers.end())
+        return nullptr;
+    else
+        return it->second;
 }
 
 std::optional<std::pair<TransportDescription, Buffer::ptr>> TransportLayer::decode(MemBlock mem)

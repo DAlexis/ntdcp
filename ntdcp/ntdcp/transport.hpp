@@ -191,9 +191,20 @@ public:
     ~BroadcastReceiver();
 
     void receive(Buffer::ptr data, const TransportDescription& header) override;
+    bool has_data();
+    std::optional<std::pair<Sender, Buffer::ptr>> get_received();
 
 private:
     TransportLayer& m_transport_layer;
+    QueueLocking<std::pair<Sender, Buffer::ptr>> m_incoming;
+};
+
+class BroadcastTransmitter : public Transmitter
+{
+public:
+    bool busy();
+    bool send(Buffer::ptr data);
+    std::optional<std::pair<TransportDescription, SegmentBuffer>> pick_outgoing() override;
 };
 
 class Acceptor : public Receiver
@@ -239,10 +250,11 @@ private:
     void serve_incoming();
     void serve_outgoing();
 
-    Acceptor* find_acceptor(uint16_t port);
-    Socket* find_socket_for_data(uint64_t source_addr, uint16_t source_port, uint16_t dst_port);
-    Socket* find_socket_for_close_submit(uint64_t source_addr, uint16_t source_port, uint16_t dst_port);
-    Socket* find_socket_for_submit(uint64_t source_addr, uint16_t dst_port);
+    Receiver* find_acceptor(uint16_t port);
+    Receiver* find_socket_for_data(uint64_t source_addr, uint16_t source_port, uint16_t dst_port);
+    Receiver* find_socket_for_close_submit(uint64_t source_addr, uint16_t source_port, uint16_t dst_port);
+    Receiver* find_socket_for_submit(uint64_t source_addr, uint16_t dst_port);
+    Receiver* find_broadcast(uint16_t port);
 
     NetworkLayer::ptr m_network;
     std::set<Socket*> m_sockets; // temporary solution
